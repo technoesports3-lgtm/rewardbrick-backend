@@ -6,26 +6,19 @@ import dotenv from 'dotenv';
 import userRoutes from './routes/userRoutes';
 import taskRoutes from './routes/taskRoutes';
 
-// 1. Environment variables load chestundi
+// 1. Environment variables load & DB connection
 dotenv.config();
 import './config/db';
 
-// 2. Express Server start chestunnam
 const app: Application = express();
-// app.listen సెక్షన్ ని ఇలా అప్డేట్ చేయ్
-const PORT = process.env.PORT || 5000;
-
-app.listen(Number(PORT), '0.0.0.0', () => {
-    console.log(`[SERVER] RewardBrick engine is running on port ${PORT}`);
-});
 
 // ==========================================
 // 🛡️ SECURITY & UTILITY MIDDLEWARES
 // ==========================================
-app.use(helmet()); // Mana tech-stack ni hide chesi secure headers isthundi
-app.use(cors({ origin: "*" })); // అన్ని రిక్వెస్ట్ లని ఒప్పుకో అని అర్థం // Vere websites (Frontend) nunchi mana backend ni access cheyadaniki
-app.use(express.json()); // JSON data ni read cheyadaniki
-app.use(morgan('dev')); // Terminal lo API requests ni log chestundi
+app.use(helmet()); 
+app.use(cors({ origin: "*" })); 
+app.use(express.json()); 
+app.use(morgan('dev')); 
 
 // ==========================================
 // 💓 SYSTEM HEARTBEAT (Health Check API)
@@ -37,13 +30,18 @@ app.get('/health', (req: Request, res: Response) => {
         timestamp: new Date().toISOString()
     });
 });
-// User Routes ni link chestunnam
+
+// ==========================================
+// 🚀 ROUTES
+// ==========================================
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/tasks', taskRoutes);
 
 // ==========================================
-// 🚀 SERVER INITIALIZATION
+// 🏁 SERVER INITIALIZATION (Only One Listen!)
 // ==========================================
-app.listen(PORT, () => {
-    console.log(`[SERVER] RewardBrick engine is running on http://localhost:${PORT}`);
+const PORT = process.env.PORT || 5000;
+
+app.listen(Number(PORT), '0.0.0.0', () => {
+    console.log(`[SERVER] RewardBrick engine is running on port ${PORT} 🧱`);
 });
