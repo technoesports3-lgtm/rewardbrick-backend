@@ -12,7 +12,12 @@ import './config/db';
 
 // 2. Express Server start chestunnam
 const app: Application = express();
+// app.listen సెక్షన్ ని ఇలా అప్డేట్ చేయ్
 const PORT = process.env.PORT || 5000;
+
+app.listen(Number(PORT), '0.0.0.0', () => {
+    console.log(`[SERVER] RewardBrick engine is running on port ${PORT}`);
+});
 
 // ==========================================
 // 🛡️ SECURITY & UTILITY MIDDLEWARES
