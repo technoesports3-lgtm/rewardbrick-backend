@@ -1,9 +1,9 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { UserModel } from '../models/userModel';
+import pool from '../config/db';
 
 export const UserController = {
-    // 1. SIGNUP: పేరు, ఈమెయిల్, పాస్‌వర్డ్ అన్నీ ఉంటేనే ఒప్పుకుంటాం
     registerUser: async (req: Request, res: Response) => {
         try {
             const { email, full_name, device_id, password } = req.body;
@@ -71,4 +71,32 @@ export const UserController = {
             res.status(500).json({ error: e.message }); 
         }
     },
+    googleRegister: async (req: Request, res: Response) => {
+    try {
+        const { name, email, device_id } = req.body;
+
+        // 1. Check if device is already used by another email
+        const userByDevice = await pool.query('SELECT * FROM users WHERE device_id = $1', [device_id]);
+        if (userByDevice.rows.length > 0 && userByDevice.rows[0].email !== email) {
+            return res.status(403).json({ status: 'error', message: 'Only one account per device is allowed!' });
+        }
+
+        // 2. Check if user already exists
+        let user = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+
+        if (user.rows.length === 0) {
+            // New user - Create account
+            const refCode = 'RB' + Math.floor(Math.random() * 900000);
+            const newUser = await pool.query(
+                'INSERT INTO users (full_name, email, device_id, referral_code) VALUES ($1, $2, $3, $4) RETURNING *',
+                [name, email, device_id, refCode]
+            );
+            user = newUser;
+        }
+
+        res.status(200).json({ status: 'success', user: user.rows[0] });
+    } catch (e: any) {
+        res.status(500).json({ status: 'error', message: e.message });
+    }
+}
 };
