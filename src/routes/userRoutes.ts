@@ -9,7 +9,7 @@ router.post('/register', UserController.registerUser);
 router.post('/login', UserController.loginUser);
 router.post('/google-register', UserController.googleRegister);
 router.get('/profile/:userId', UserController.getUserProfile);
-
+router.post('/daily-bonus', UserController.claimDailyBonus);
 
 // ==========================================
 // 🛡️ ADMIN: Withdrawals 

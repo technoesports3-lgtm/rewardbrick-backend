@@ -98,5 +98,60 @@ export const UserController = {
     } catch (e: any) {
         res.status(500).json({ status: 'error', message: e.message });
     }
-}
+},     
+
+    claimDailyBonus: async (req: Request, res: Response) => {
+        const { userId } = req.body;
+        if (!userId) return res.status(400).json({ error: "User ID required" });
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+
+            
+            const lastClaimQuery = `
+                SELECT created_at FROM activity_logs 
+                WHERE user_id = $1 AND activity_type = 'daily_bonus' 
+                ORDER BY created_at DESC LIMIT 1;
+            `;
+            const lastClaimRes = await client.query(lastClaimQuery, [userId]);
+
+            if (lastClaimRes.rows.length > 0) {
+                const lastClaimTime = new Date(lastClaimRes.rows[0].created_at).getTime();
+                const currentTime = new Date().getTime();
+                const hoursPassed = (currentTime - lastClaimTime) / (1000 * 60 * 60);
+
+                if (hoursPassed < 24) {
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({ error: "Come back tomorrow for your next bonus!" });
+                }
+            }
+
+            
+            const updateRes = await client.query(
+                'UPDATE users SET wallet_balance = wallet_balance + 100 WHERE user_id = $1 RETURNING wallet_balance',
+                [userId]
+            );
+            const newBalance = updateRes.rows[0].wallet_balance;
+
+            
+            await client.query(
+                'INSERT INTO transactions (user_id, amount, transaction_type, source, balance_after) VALUES ($1, $2, $3, $4, $5)',
+                [userId, 100, 'daily_bonus', 'System Reward', newBalance]
+            );
+            await client.query(
+                'INSERT INTO activity_logs (user_id, activity_type) VALUES ($1, $2)',
+                [userId, 'daily_bonus']
+            );
+
+            await client.query('COMMIT');
+            return res.status(200).json({ status: 'success', message: '100 Coins Claimed!', newBalance });
+
+        } catch (e: any) {
+            await client.query('ROLLBACK');
+            return res.status(500).json({ error: e.message });
+        } finally {
+            client.release();
+        }
+    }
 };
