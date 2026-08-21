@@ -33,7 +33,7 @@ export const UserController = {
         }
     },
 
-    // 2. LOGIN: ఈమెయిల్ & పాస్‌వర్డ్ వెరిఫికేషన్
+   
     loginUser: async (req: Request, res: Response) => {
         try {
             const { email, password } = req.body;
@@ -59,7 +59,7 @@ export const UserController = {
     },
     getUserProfile: async (req: Request, res: Response) => {
         try {
-            // ఇక్కడ 'as string' అని చెప్పాలి, అప్పుడే TypeScript కి అర్థం అవుతుంది
+             
             const userId = req.params.userId as string; 
             const user = await UserModel.findById(userId);
             
