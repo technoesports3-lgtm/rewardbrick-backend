@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
+import { PoolClient } from 'pg';
 import pool from '../config/db';
 import { TaskModel } from '../models/taskModel';
-import { UserModel } from '../models/userModel';
 
 const defaultProviderUrls = {
     cpx_research: 'https://offers.cpx-research.com/index.php?app_id=52007&ext_user_id={userId}',
@@ -82,24 +82,16 @@ export const TaskController = {
     },
 
     handlePostback: async (req: Request, res: Response) => {
+        let client: PoolClient | undefined;
+
         try {
-            const { provider, secret_key, amount, userId, subid, task_id, offer_id } = req.query;
-            console.log("Postback Received for User:", subid, "Amount:", amount);
-            const providerName = String(provider || '').toLowerCase();
-            const targetUserId = String(userId || subid || '');
+            const { amount, subid, secret_key, task_id, offer_id } = req.query;
+            const targetUserId = typeof subid === 'string' ? subid.trim() : '';
+            const rawAmount = typeof amount === 'string' ? amount : '';
 
-            if (!providerName) {
-                return res.status(400).send('0');
-            }
+            console.log('Incoming Postback:', { subid: targetUserId, amount: rawAmount });
 
-            const providerConfig = await TaskModel.getProviderConfig(providerName);
-            if (!providerConfig) {
-                console.warn(`[POSTBACK] Unknown provider: ${providerName}`);
-                return res.status(404).send('0');
-            }
-
-            if (!secret_key || !providerConfig.secret_key || String(secret_key) !== String(providerConfig.secret_key)) {
-                console.warn(`[POSTBACK] Unauthorized signal for provider ${providerName}`);
+            if (typeof secret_key !== 'string' || secret_key !== 'susanth_secret_777') {
                 return res.status(401).send('0');
             }
 
@@ -107,42 +99,50 @@ export const TaskController = {
                 return res.status(400).send('0');
             }
 
-            const rewardAmount = Math.round(Number(amount));
+            const rewardAmount = Math.round(parseFloat(rawAmount));
             if (!Number.isFinite(rewardAmount) || rewardAmount <= 0) {
                 return res.status(400).send('0');
             }
 
-            const user = await UserModel.findById(targetUserId);
-            if (!user) {
-                console.warn(`[POSTBACK] User not found: ${targetUserId}`);
+            client = await pool.connect();
+            await client.query('BEGIN');
+
+            const userResult = await client.query(
+                'SELECT user_id FROM users WHERE user_id = $1 FOR UPDATE',
+                [targetUserId]
+            );
+
+            if (userResult.rowCount === 0) {
+                console.warn('User Not Found:', targetUserId);
+                await client.query('ROLLBACK');
                 return res.status(404).send('0');
             }
 
-            const result = await UserModel.addCoins(
-                targetUserId,
-                rewardAmount,
-                'task',
-                `Provider:${providerName} - ${offer_id || task_id || 'postback'}`
+            const updateResult = await client.query(
+                'UPDATE users SET wallet_balance = wallet_balance + $1 WHERE user_id = $2 RETURNING wallet_balance',
+                [rewardAmount, targetUserId]
+            );
+            const newBalance = updateResult.rows[0].wallet_balance;
+            const source = `CPX Research - ${offer_id || task_id || 'postback'}`;
+
+            await client.query(
+                'INSERT INTO transactions (user_id, amount, transaction_type, source, balance_after) VALUES ($1, $2, $3, $4, $5)',
+                [targetUserId, rewardAmount, 'task', source, newBalance]
             );
 
-            if (task_id) {
-                await TaskModel.recordTaskCompletion(
-                    targetUserId,
-                    String(task_id),
-                    rewardAmount,
-                    {
-                        provider: providerName,
-                        amount: rewardAmount,
-                        rawQuery: req.query
-                    }
-                );
-            }
-
-            console.log(`[MONEY] Credited ${rewardAmount} to User ${targetUserId} via ${providerName}. New balance: ${result.newBalance}`);
+            await client.query('COMMIT');
+            console.log('Success:', { userId: targetUserId, amount: rewardAmount, newBalance });
             return res.status(200).send('1');
         } catch (error: any) {
+            if (client) {
+                await client.query('ROLLBACK').catch((rollbackError: Error) => {
+                    console.error('Postback Rollback Error:', rollbackError.message);
+                });
+            }
             console.error('Postback Error:', error.message);
             return res.status(500).send('0');
+        } finally {
+            client?.release();
         }
     }
 };
