@@ -84,6 +84,7 @@ export const TaskController = {
     handlePostback: async (req: Request, res: Response) => {
         try {
             const { provider, secret_key, amount, userId, subid, task_id, offer_id } = req.query;
+            console.log("Postback Received for User:", subid, "Amount:", amount);
             const providerName = String(provider || '').toLowerCase();
             const targetUserId = String(userId || subid || '');
 
@@ -97,7 +98,7 @@ export const TaskController = {
                 return res.status(404).send('0');
             }
 
-            if (String(secret_key) !== String(providerConfig.secret_key)) {
+            if (!secret_key || !providerConfig.secret_key || String(secret_key) !== String(providerConfig.secret_key)) {
                 console.warn(`[POSTBACK] Unauthorized signal for provider ${providerName}`);
                 return res.status(401).send('0');
             }
@@ -106,9 +107,15 @@ export const TaskController = {
                 return res.status(400).send('0');
             }
 
-            const rewardAmount = Math.floor(Number(amount ?? 0));
+            const rewardAmount = Math.round(Number(amount));
             if (!Number.isFinite(rewardAmount) || rewardAmount <= 0) {
                 return res.status(400).send('0');
+            }
+
+            const user = await UserModel.findById(targetUserId);
+            if (!user) {
+                console.warn(`[POSTBACK] User not found: ${targetUserId}`);
+                return res.status(404).send('0');
             }
 
             const result = await UserModel.addCoins(
