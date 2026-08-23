@@ -123,11 +123,15 @@ export const TaskController = {
                 [rewardAmount, targetUserId]
             );
             const newBalance = updateResult.rows[0].wallet_balance;
-            const source = `CPX Research - ${offer_id || task_id || 'postback'}`;
+            const source = `Offerwall - ${offer_id || task_id || 'postback'}`;
 
             await client.query(
                 'INSERT INTO transactions (user_id, amount, transaction_type, source, balance_after) VALUES ($1, $2, $3, $4, $5)',
                 [targetUserId, rewardAmount, 'task', source, newBalance]
+            );
+            await client.query(
+                'INSERT INTO activity_logs (user_id, activity_type) VALUES ($1, $2)',
+                [targetUserId, 'offerwall_completion']
             );
 
             await client.query('COMMIT');
