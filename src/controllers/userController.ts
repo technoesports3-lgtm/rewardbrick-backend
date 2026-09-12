@@ -3,12 +3,20 @@ import bcrypt from 'bcryptjs';
 import { UserModel } from '../models/userModel';
 import pool from '../config/db';
 
+const toNumber = (value: any): number => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim() !== '') {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return 0;
+};
+
 export const UserController = {
     registerUser: async (req: Request, res: Response) => {
         try {
             const { email, full_name, device_id, password } = req.body;
 
-            // 🛡️ STRICT VALIDATION
             if (!email || !full_name || !password || !device_id) {
                 return res.status(400).json({ status: 'error', message: 'All fields are required!' });
             }
@@ -21,7 +29,6 @@ export const UserController = {
                 return res.status(400).json({ status: 'error', message: 'User already exists with this Email or Device!' });
             }
 
-            // Secure Hashing
             const salt = await bcrypt.genSalt(10);
             const hashedPassword = await bcrypt.hash(password, salt);
             const referralCode = 'RB' + Math.floor(100000 + Math.random() * 900000);
@@ -33,7 +40,6 @@ export const UserController = {
         }
     },
 
-   
     loginUser: async (req: Request, res: Response) => {
         try {
             const { email, password } = req.body;
@@ -42,7 +48,7 @@ export const UserController = {
                 return res.status(400).json({ status: 'error', message: 'Email and Password are required!' });
             }
 
-            const user = await UserModel.findByEmailOrDevice(email, "");
+            const user = await UserModel.findByEmailOrDevice(email, '');
             if (!user) {
                 return res.status(404).json({ status: 'error', message: 'User not found!' });
             }
@@ -57,61 +63,215 @@ export const UserController = {
             return res.status(500).json({ status: 'error', message: 'Server Login Error' });
         }
     },
+
     getUserProfile: async (req: Request, res: Response) => {
         try {
-             
-            const userId = req.params.userId as string; 
+            const userId = req.params.userId as string;
             const user = await UserModel.findById(userId);
-            
+
             if (!user) {
-                return res.status(404).json({ error: "User not found" });
+                return res.status(404).json({ error: 'User not found' });
             }
-            res.status(200).json({ status: 'success', user });
-        } catch (e: any) { 
-            res.status(500).json({ error: e.message }); 
+
+            return res.status(200).json({ status: 'success', user });
+        } catch (e: any) {
+            return res.status(500).json({ error: e.message });
         }
     },
-    googleRegister: async (req: Request, res: Response) => {
-    try {
-        const { name, email, device_id } = req.body;
 
-        // 1. Check if device is already used by another email
-        const userByDevice = await pool.query('SELECT * FROM users WHERE device_id = $1', [device_id]);
-        if (userByDevice.rows.length > 0 && userByDevice.rows[0].email !== email) {
-            return res.status(403).json({ status: 'error', message: 'Only one account per device is allowed!' });
-        }
+    getUserStats: async (req: Request, res: Response) => {
+        try {
+            const userId = req.params.userId as string;
+            const user = await UserModel.findById(userId);
+            if (!user) {
+                return res.status(404).json({ status: 'error', message: 'User not found' });
+            }
 
-        // 2. Check if user already exists
-        let user = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-
-        if (user.rows.length === 0) {
-            // New user - Create account
-            const refCode = 'RB' + Math.floor(Math.random() * 900000);
-            const newUser = await pool.query(
-                'INSERT INTO users (full_name, email, device_id, referral_code) VALUES ($1, $2, $3, $4) RETURNING *',
-                [name, email, device_id, refCode]
+            const earningsResult = await pool.query(
+                `SELECT COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS coins_earned,
+                        COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) AS coins_redeemed
+                 FROM transactions WHERE user_id = $1`,
+                [userId]
             );
-            user = newUser;
-        }
 
-        res.status(200).json({ status: 'success', user: user.rows[0] });
-    } catch (e: any) {
-        res.status(500).json({ status: 'error', message: e.message });
-    }
-},     
+            const offersResult = await pool.query(
+                `SELECT COUNT(*) AS offers_completed
+                 FROM transactions
+                 WHERE user_id = $1 AND (transaction_type IN ('task', 'offerwall_completion', 'daily_bonus') OR source ILIKE '%offer%')`,
+                [userId]
+            );
+
+            const stats = {
+                coins_earned: toNumber(earningsResult.rows[0]?.coins_earned ?? 0),
+                coins_redeemed: toNumber(earningsResult.rows[0]?.coins_redeemed ?? 0),
+                offers_completed: toNumber(offersResult.rows[0]?.offers_completed ?? 0),
+                offers_tried: toNumber(offersResult.rows[0]?.offers_completed ?? 0),
+                referrals: 0,
+                member_since: user.created_at || user.createdAt || null,
+                streak_days: 1,
+                total_earned: toNumber(earningsResult.rows[0]?.coins_earned ?? 0),
+                total_redeemed: toNumber(earningsResult.rows[0]?.coins_redeemed ?? 0),
+            };
+
+            return res.status(200).json({ status: 'success', stats });
+        } catch (e: any) {
+            return res.status(500).json({ status: 'error', message: e.message });
+        }
+    },
+
+    getWalletBalance: async (req: Request, res: Response) => {
+        try {
+            const userId = req.params.userId as string;
+            const user = await UserModel.findById(userId);
+            if (!user) {
+                return res.status(404).json({ status: 'error', message: 'User not found' });
+            }
+
+            const balance = toNumber(user.wallet_balance ?? 0);
+            const earned = await pool.query(
+                `SELECT COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) AS total_earned
+                 FROM transactions WHERE user_id = $1`,
+                [userId]
+            );
+            const redeemed = await pool.query(
+                `SELECT COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) AS total_redeemed
+                 FROM transactions WHERE user_id = $1`,
+                [userId]
+            );
+
+            return res.status(200).json({
+                status: 'success',
+                balance,
+                total_earned: toNumber(earned.rows[0]?.total_earned ?? 0),
+                total_redeemed: toNumber(redeemed.rows[0]?.total_redeemed ?? 0),
+                pending_withdrawals: 0,
+            });
+        } catch (e: any) {
+            return res.status(500).json({ status: 'error', message: e.message });
+        }
+    },
+
+    googleRegister: async (req: Request, res: Response) => {
+        try {
+            const { name, email, device_id } = req.body;
+
+            const userByDevice = await pool.query('SELECT * FROM users WHERE device_id = $1', [device_id]);
+            if (userByDevice.rows.length > 0 && userByDevice.rows[0].email !== email) {
+                return res.status(403).json({ status: 'error', message: 'Only one account per device is allowed!' });
+            }
+
+            let user = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+
+            if (user.rows.length === 0) {
+                const refCode = 'RB' + Math.floor(Math.random() * 900000);
+                const newUser = await pool.query(
+                    'INSERT INTO users (full_name, email, device_id, referral_code) VALUES ($1, $2, $3, $4) RETURNING *',
+                    [name, email, device_id, refCode]
+                );
+                user = newUser;
+            }
+
+            return res.status(200).json({ status: 'success', user: user.rows[0] });
+        } catch (e: any) {
+            return res.status(500).json({ status: 'error', message: e.message });
+        }
+    },
+
+    getTransactionHistory: async (req: Request, res: Response) => {
+        try {
+            const userId = req.params.userId as string;
+            const result = await pool.query(
+                `SELECT * FROM transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`,
+                [userId]
+            );
+
+            return res.status(200).json({ status: 'success', transactions: result.rows });
+        } catch (e: any) {
+            return res.status(500).json({ status: 'error', message: e.message });
+        }
+    },
+
+    getWithdrawalHistory: async (req: Request, res: Response) => {
+        try {
+            const userId = req.params.userId as string;
+            const result = await pool.query(
+                `SELECT * FROM withdrawals WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`,
+                [userId]
+            );
+
+            return res.status(200).json({ status: 'success', withdrawals: result.rows });
+        } catch (e: any) {
+            return res.status(500).json({ status: 'error', message: e.message });
+        }
+    },
+
+    requestWithdrawal: async (req: Request, res: Response) => {
+        try {
+            const { user_id, userId, amount_coins, upi_id, method } = req.body;
+            const targetUserId = String(user_id || userId || '');
+            const targetAmount = toNumber(amount_coins ?? 0);
+            const upi = String(upi_id || '').trim();
+            const selectedMethod = String(method || 'upi');
+
+            if (!targetUserId) {
+                return res.status(400).json({ status: 'error', message: 'User ID required' });
+            }
+            if (targetAmount < 50) {
+                return res.status(400).json({ status: 'error', message: 'Minimum withdrawal is 50 coins' });
+            }
+            if (selectedMethod === 'upi' && !upi) {
+                return res.status(400).json({ status: 'error', message: 'UPI ID is required' });
+            }
+
+            const user = await UserModel.findById(targetUserId);
+            if (!user) {
+                return res.status(404).json({ status: 'error', message: 'User not found' });
+            }
+
+            const currentBalance = toNumber(user.wallet_balance ?? 0);
+            if (currentBalance < targetAmount) {
+                return res.status(400).json({ status: 'error', message: 'Insufficient wallet balance' });
+            }
+
+            const updateResult = await pool.query(
+                'UPDATE users SET wallet_balance = wallet_balance - $1 WHERE user_id = $2 RETURNING wallet_balance',
+                [targetAmount, targetUserId]
+            );
+            const newBalance = toNumber(updateResult.rows[0]?.wallet_balance ?? 0);
+
+            const withdrawalResult = await pool.query(
+                `INSERT INTO withdrawals (user_id, amount_coins, method, upi_id, status)
+                 VALUES ($1, $2, $3, $4, 'pending') RETURNING *`,
+                [targetUserId, targetAmount, selectedMethod, upi || null]
+            );
+
+            await pool.query(
+                'INSERT INTO transactions (user_id, amount, transaction_type, source, balance_after) VALUES ($1, $2, $3, $4, $5)',
+                [targetUserId, -targetAmount, 'withdrawal', 'Withdrawal Request', newBalance]
+            );
+
+            return res.status(200).json({
+                status: 'success',
+                message: 'Withdrawal request submitted successfully',
+                withdrawal: withdrawalResult.rows[0],
+                new_balance: newBalance,
+            });
+        } catch (e: any) {
+            return res.status(500).json({ status: 'error', message: e.message });
+        }
+    },
 
     claimDailyBonus: async (req: Request, res: Response) => {
         const { userId } = req.body;
-        if (!userId) return res.status(400).json({ error: "User ID required" });
+        if (!userId) return res.status(400).json({ error: 'User ID required' });
 
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
 
-            
             const lastClaimQuery = `
-                SELECT created_at FROM activity_logs 
-                WHERE user_id = $1 AND activity_type = 'daily_bonus' 
+                SELECT created_at FROM activity_logs
+                WHERE user_id = $1 AND activity_type = 'daily_bonus'
                 ORDER BY created_at DESC LIMIT 1;
             `;
             const lastClaimRes = await client.query(lastClaimQuery, [userId]);
@@ -123,18 +283,16 @@ export const UserController = {
 
                 if (hoursPassed < 24) {
                     await client.query('ROLLBACK');
-                    return res.status(400).json({ error: "Come back tomorrow for your next bonus!" });
+                    return res.status(400).json({ error: 'Come back tomorrow for your next bonus!' });
                 }
             }
 
-            
             const updateRes = await client.query(
                 'UPDATE users SET wallet_balance = wallet_balance + 100 WHERE user_id = $1 RETURNING wallet_balance',
                 [userId]
             );
             const newBalance = updateRes.rows[0].wallet_balance;
 
-            
             await client.query(
                 'INSERT INTO transactions (user_id, amount, transaction_type, source, balance_after) VALUES ($1, $2, $3, $4, $5)',
                 [userId, 100, 'daily_bonus', 'System Reward', newBalance]
@@ -146,7 +304,6 @@ export const UserController = {
 
             await client.query('COMMIT');
             return res.status(200).json({ status: 'success', message: '100 Coins Claimed!', newBalance });
-
         } catch (e: any) {
             await client.query('ROLLBACK');
             return res.status(500).json({ error: e.message });

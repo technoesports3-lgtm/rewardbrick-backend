@@ -29,6 +29,40 @@ export const ensureProviderSchema = async () => {
     `);
 
     await pool.query(`
+        CREATE TABLE IF NOT EXISTS transactions (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+            transaction_type TEXT NOT NULL DEFAULT 'credit',
+            source TEXT,
+            balance_after NUMERIC(12,2) DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS withdrawals (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            amount_coins NUMERIC(12,2) NOT NULL DEFAULT 0,
+            method TEXT NOT NULL DEFAULT 'upi',
+            upi_id TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            completed_at TIMESTAMPTZ
+        );
+    `);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS activity_logs (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            activity_type TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    await pool.query(`
         INSERT INTO provider_configs (provider_name, base_url, secret_key)
         VALUES
             ('cpx_research', 'https://offers.cpx-research.com/index.php?app_id=52007&ext_user_id={userId}', 'cpx_secret_777'),

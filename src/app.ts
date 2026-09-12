@@ -5,6 +5,8 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 import userRoutes from './routes/userRoutes';
 import taskRoutes from './routes/taskRoutes';
+import walletRoutes from './routes/walletRoutes';
+import withdrawalRoutes from './routes/withdrawalRoutes';
 
 // 1. Environment variables load & DB connection
 dotenv.config();
@@ -36,6 +38,8 @@ app.get('/health', (req: Request, res: Response) => {
 // ==========================================
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/tasks', taskRoutes);
+app.use('/api/v1/wallet', walletRoutes);
+app.use('/api/v1/withdrawals', withdrawalRoutes);
 
 // ==========================================
 // 🏁 SERVER INITIALIZATION (Only One Listen!)
