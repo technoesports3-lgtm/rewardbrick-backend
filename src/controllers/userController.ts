@@ -138,13 +138,18 @@ export const UserController = {
                  FROM transactions WHERE user_id = $1`,
                 [userId]
             );
+            const pending = await pool.query(
+                `SELECT COALESCE(SUM(amount_coins), 0) AS pending_withdrawals
+                 FROM withdrawals WHERE user_id = $1 AND status = 'pending'`,
+                [userId]
+            );
 
             return res.status(200).json({
                 status: 'success',
                 balance,
                 total_earned: toNumber(earned.rows[0]?.total_earned ?? 0),
                 total_redeemed: toNumber(redeemed.rows[0]?.total_redeemed ?? 0),
-                pending_withdrawals: 0,
+                pending_withdrawals: toNumber(pending.rows[0]?.pending_withdrawals ?? 0),
             });
         } catch (e: any) {
             return res.status(500).json({ status: 'error', message: e.message });
@@ -206,6 +211,7 @@ export const UserController = {
     },
 
     requestWithdrawal: async (req: Request, res: Response) => {
+        const client = await pool.connect();
         try {
             const { user_id, userId, amount_coins, upi_id, method } = req.body;
             const targetUserId = String(user_id || userId || '');
@@ -223,32 +229,41 @@ export const UserController = {
                 return res.status(400).json({ status: 'error', message: 'UPI ID is required' });
             }
 
-            const user = await UserModel.findById(targetUserId);
-            if (!user) {
+            await client.query('BEGIN');
+
+            const userResult = await client.query(
+                'SELECT wallet_balance FROM users WHERE user_id = $1 FOR UPDATE',
+                [targetUserId]
+            );
+            if (userResult.rows.length === 0) {
+                await client.query('ROLLBACK');
                 return res.status(404).json({ status: 'error', message: 'User not found' });
             }
 
-            const currentBalance = toNumber(user.wallet_balance ?? 0);
+            const currentBalance = toNumber(userResult.rows[0].wallet_balance ?? 0);
             if (currentBalance < targetAmount) {
+                await client.query('ROLLBACK');
                 return res.status(400).json({ status: 'error', message: 'Insufficient wallet balance' });
             }
 
-            const updateResult = await pool.query(
+            const updateResult = await client.query(
                 'UPDATE users SET wallet_balance = wallet_balance - $1 WHERE user_id = $2 RETURNING wallet_balance',
                 [targetAmount, targetUserId]
             );
             const newBalance = toNumber(updateResult.rows[0]?.wallet_balance ?? 0);
 
-            const withdrawalResult = await pool.query(
+            const withdrawalResult = await client.query(
                 `INSERT INTO withdrawals (user_id, amount_coins, method, upi_id, status)
                  VALUES ($1, $2, $3, $4, 'pending') RETURNING *`,
                 [targetUserId, targetAmount, selectedMethod, upi || null]
             );
 
-            await pool.query(
+            await client.query(
                 'INSERT INTO transactions (user_id, amount, transaction_type, source, balance_after) VALUES ($1, $2, $3, $4, $5)',
                 [targetUserId, -targetAmount, 'withdrawal', 'Withdrawal Request', newBalance]
             );
+
+            await client.query('COMMIT');
 
             return res.status(200).json({
                 status: 'success',
@@ -257,7 +272,79 @@ export const UserController = {
                 new_balance: newBalance,
             });
         } catch (e: any) {
+            await client.query('ROLLBACK').catch(() => undefined);
             return res.status(500).json({ status: 'error', message: e.message });
+        } finally {
+            client.release();
+        }
+    },
+
+    updateWithdrawalStatus: async (req: Request, res: Response) => {
+        const client = await pool.connect();
+        try {
+            const withdrawalId = Number(req.params.withdrawalId);
+            const { status } = req.body;
+
+            if (!Number.isInteger(withdrawalId) || !['completed', 'failed'].includes(status)) {
+                return res.status(400).json({
+                    status: 'error',
+                    message: 'A valid withdrawal ID and completed or failed status are required',
+                });
+            }
+
+            await client.query('BEGIN');
+            const withdrawalResult = await client.query(
+                'SELECT * FROM withdrawals WHERE id = $1 FOR UPDATE',
+                [withdrawalId]
+            );
+            if (withdrawalResult.rows.length === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ status: 'error', message: 'Withdrawal not found' });
+            }
+
+            const withdrawal = withdrawalResult.rows[0];
+            if (withdrawal.status !== 'pending') {
+                await client.query('ROLLBACK');
+                return res.status(409).json({
+                    status: 'error',
+                    message: `Withdrawal is already ${withdrawal.status}`,
+                });
+            }
+
+            if (status === 'failed') {
+                const userResult = await client.query(
+                    `UPDATE users SET wallet_balance = wallet_balance + $1
+                     WHERE user_id = $2 RETURNING wallet_balance`,
+                    [withdrawal.amount_coins, withdrawal.user_id]
+                );
+                if (userResult.rows.length === 0) {
+                    throw new Error('User for withdrawal not found');
+                }
+
+                await client.query(
+                    `INSERT INTO transactions
+                        (user_id, amount, transaction_type, source, balance_after)
+                     VALUES ($1, $2, 'withdrawal_refund', 'Failed Withdrawal Refund', $3)`,
+                    [withdrawal.user_id, withdrawal.amount_coins, userResult.rows[0].wallet_balance]
+                );
+            }
+
+            const updatedResult = await client.query(
+                `UPDATE withdrawals SET status = $1, completed_at = NOW()
+                 WHERE id = $2 RETURNING *`,
+                [status, withdrawalId]
+            );
+            await client.query('COMMIT');
+
+            return res.status(200).json({
+                status: 'success',
+                withdrawal: updatedResult.rows[0],
+            });
+        } catch (e: any) {
+            await client.query('ROLLBACK').catch(() => undefined);
+            return res.status(500).json({ status: 'error', message: e.message });
+        } finally {
+            client.release();
         }
     },
 
