@@ -12,6 +12,24 @@ const toNumber = (value: any): number => {
     return 0;
 };
 
+const rankedEarningsQuery = `
+    WITH user_earnings AS (
+        SELECT u.user_id,
+               u.full_name,
+               COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) AS coins_earned
+        FROM users u
+        LEFT JOIN transactions t ON t.user_id = u.user_id
+        GROUP BY u.user_id, u.full_name
+    ),
+    ranked_users AS (
+        SELECT user_id,
+               full_name,
+               coins_earned,
+               ROW_NUMBER() OVER (ORDER BY coins_earned DESC, user_id ASC) AS rank
+        FROM user_earnings
+    )
+`;
+
 export const UserController = {
     registerUser: async (req: Request, res: Response) => {
         try {
@@ -116,6 +134,81 @@ export const UserController = {
             return res.status(200).json({ status: 'success', stats });
         } catch (e: any) {
             return res.status(500).json({ status: 'error', message: e.message });
+        }
+    },
+
+    getLeaderboard: async (req: Request, res: Response) => {
+        const rawLimit = req.query.limit ?? '50';
+        const rawOffset = req.query.offset ?? '0';
+        const userId = req.query.userId;
+        const limit = Number(rawLimit);
+        const offset = Number(rawOffset);
+
+        if (
+            (typeof userId !== 'undefined' && typeof userId !== 'string') ||
+            (typeof userId === 'string' && userId.trim() === '') ||
+            (typeof rawLimit !== 'string' && typeof rawLimit !== 'number') ||
+            (typeof rawOffset !== 'string' && typeof rawOffset !== 'number') ||
+            !Number.isInteger(limit) ||
+            limit < 1 ||
+            limit > 100 ||
+            !Number.isInteger(offset) ||
+            offset < 0
+        ) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'A valid userId, limit (1-100), and non-negative offset are required.',
+            });
+        }
+
+        try {
+            const [leaderboardResult, countResult, currentUserResult] = await Promise.all([
+                pool.query(
+                    `${rankedEarningsQuery}
+                     SELECT user_id, full_name, coins_earned, rank
+                     FROM ranked_users
+                     ORDER BY rank
+                     LIMIT $1 OFFSET $2`,
+                    [limit, offset]
+                ),
+                pool.query('SELECT COUNT(*) AS total_users FROM users'),
+                typeof userId === 'string'
+                    ? pool.query(
+                        `${rankedEarningsQuery}
+                         SELECT rank, coins_earned
+                         FROM ranked_users
+                         WHERE user_id = $1`,
+                        [userId]
+                    )
+                    : Promise.resolve({ rows: [] }),
+            ]);
+
+            const totalUsers = Number(countResult.rows[0]?.total_users ?? 0);
+            const currentUser = currentUserResult.rows[0];
+            const entries = leaderboardResult.rows.map((entry) => ({
+                rank: Number(entry.rank),
+                name: String(entry.full_name ?? '').trim() || 'Player',
+                coins_earned: Number(entry.coins_earned),
+                is_current_user: typeof userId === 'string' && entry.user_id === userId,
+            }));
+
+            return res.status(200).json({
+                status: 'success',
+                entries,
+                current_user_rank: currentUser ? Number(currentUser.rank) : null,
+                current_user_coins: currentUser ? Number(currentUser.coins_earned) : null,
+                total_users: totalUsers,
+                has_more: offset + entries.length < totalUsers,
+            });
+        } catch (e: any) {
+            console.error(
+                'Leaderboard query failed:',
+                e instanceof Error ? e.message : 'Unknown error'
+            );
+            return res.status(500).json({
+                status: 'error',
+                message: 'Unable to load leaderboard.',
+            });
         }
     },
 

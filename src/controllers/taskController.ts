@@ -3,6 +3,10 @@ import { PoolClient } from 'pg';
 import pool from '../config/db';
 import { TaskModel } from '../models/taskModel';
 
+const COINS_PER_RUPEE = 100;
+const ADMANTUM_REWARD_RUPEES = 40;
+const ADMANTUM_REWARD_COINS = COINS_PER_RUPEE * ADMANTUM_REWARD_RUPEES;
+
 const defaultProviderUrls = {
     cpx_research: 'https://offers.cpx-research.com/index.php?app_id=52007&ext_user_id={userId}',
     admantum: 'https://offers.admantum.com/track?user_id={userId}',
@@ -88,10 +92,14 @@ export const TaskController = {
             const { amount, subid, secret_key, task_id, offer_id } = req.query;
             const targetUserId = typeof subid === 'string' ? subid.trim() : '';
             const rawAmount = typeof amount === 'string' ? amount : '';
+            const providerSecret = typeof secret_key === 'string' ? secret_key : '';
 
-            console.log('Incoming Postback:', { subid: targetUserId, amount: rawAmount });
+            if (!providerSecret) {
+                return res.status(401).send('0');
+            }
 
-            if (typeof secret_key !== 'string' || secret_key !== 'susanth_secret_777') {
+            const providerName = await TaskModel.getProviderNameBySecret(providerSecret);
+            if (!providerName) {
                 return res.status(401).send('0');
             }
 
@@ -99,10 +107,14 @@ export const TaskController = {
                 return res.status(400).send('0');
             }
 
-            const rewardAmount = Math.round(parseFloat(rawAmount));
-            if (!Number.isFinite(rewardAmount) || rewardAmount <= 0) {
+            const providerPayout = Number(rawAmount);
+            if (!Number.isFinite(providerPayout) || providerPayout <= 0) {
                 return res.status(400).send('0');
             }
+
+            const rewardAmount = providerName.toLowerCase() === 'admantum'
+                ? ADMANTUM_REWARD_COINS
+                : Math.round(providerPayout);
 
             client = await pool.connect();
             await client.query('BEGIN');
@@ -135,7 +147,12 @@ export const TaskController = {
             );
 
             await client.query('COMMIT');
-            console.log('Success:', { userId: targetUserId, amount: rewardAmount, newBalance });
+            console.log('Postback credited:', {
+                userId: targetUserId,
+                provider: providerName,
+                coins: rewardAmount,
+                newBalance,
+            });
             return res.status(200).send('1');
         } catch (error: any) {
             if (client) {

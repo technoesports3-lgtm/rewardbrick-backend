@@ -18,6 +18,13 @@ export const TaskModel = {
         );
         return res.rows[0] ?? null;
     },
+    getProviderNameBySecret: async (secretKey: string): Promise<string | null> => {
+        const res = await pool.query(
+            'SELECT provider_name FROM provider_configs WHERE secret_key = $1',
+            [secretKey]
+        );
+        return res.rows[0]?.provider_name ?? null;
+    },
     recordTaskCompletion: async (userId: string, taskId: string, coins: number, meta: any) => {
         const query = `INSERT INTO user_tasks (user_id, task_id, status, rewarded_coins, postback_meta) VALUES ($1, $2, 'completed', $3, $4) RETURNING *;`;
         const res = await pool.query(query, [userId, taskId, coins, meta]);

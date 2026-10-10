@@ -7,6 +7,7 @@ router.post('/register', UserController.registerUser);
 router.post('/login', UserController.loginUser);
 router.get('/profile/:userId', UserController.getUserProfile);
 router.get('/stats/:userId', UserController.getUserStats);
+router.get('/leaderboard', UserController.getLeaderboard);
 router.post('/daily-bonus', UserController.claimDailyBonus);
 router.post('/google-register', UserController.googleRegister);
 router.post('/withdraw', UserController.requestWithdrawal);
