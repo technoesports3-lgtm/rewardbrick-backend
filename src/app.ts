@@ -7,10 +7,11 @@ import userRoutes from './routes/userRoutes';
 import taskRoutes from './routes/taskRoutes';
 import walletRoutes from './routes/walletRoutes';
 import withdrawalRoutes from './routes/withdrawalRoutes';
+import adminRoutes from './routes/adminRoutes';
 
 // 1. Environment variables load & DB connection
 dotenv.config();
-import './config/db';
+import { databaseReady } from './config/db';
 
 const app: Application = express();
 
@@ -33,6 +34,8 @@ app.get('/health', (req: Request, res: Response) => {
     });
 });
 
+app.use('/admin', adminRoutes);
+
 // ==========================================
 // 🚀 ROUTES
 // ==========================================
@@ -46,6 +49,11 @@ app.use('/api/v1/withdrawals', withdrawalRoutes);
 // ==========================================
 const PORT = process.env.PORT || 5000;
 
-app.listen(Number(PORT), '0.0.0.0', () => {
-    console.log(`[SERVER] RewardBrick engine is running on port ${PORT} 🧱`);
+databaseReady.then(() => {
+    app.listen(Number(PORT), '0.0.0.0', () => {
+        console.log(`[SERVER] RewardBrick engine is running on port ${PORT} 🧱`);
+    });
+}).catch((error: Error) => {
+    console.error('[SERVER] Database setup failed; API was not started:', error.message);
+    process.exitCode = 1;
 });

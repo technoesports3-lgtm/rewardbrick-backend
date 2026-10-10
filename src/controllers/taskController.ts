@@ -37,6 +37,7 @@ export const TaskController = {
         try {
             const tasks = await TaskModel.getAllTasks();
             const providerConfigs = await TaskModel.getProviderConfigs();
+            const managedTasks = await TaskModel.getManagedTasks();
             const providerMap = providerConfigs.reduce((acc: Record<string, any>, provider: any) => {
                 acc[provider.provider_name] = provider;
                 return acc;
@@ -61,18 +62,40 @@ export const TaskController = {
                     admantum: buildProviderLink('admantum', userId === '{userId}' ? undefined : userId),
                     gamezop: buildProviderLink('gamezop', userId === '{userId}' ? undefined : userId)
                 },
-                offers: tasks.map((task: any) => {
-                    const taskType = String(task.task_type || task.provider_name || 'direct').toLowerCase();
-                    const providerName = task.provider_name ? String(task.provider_name).toLowerCase() : null;
-                    const providerLink = providerName ? buildProviderLink(providerName, userId === '{userId}' ? undefined : userId) : null;
+                offers: [
+                    ...tasks.map((task: any) => {
+                        const taskType = String(task.task_type || task.provider_name || 'direct').toLowerCase();
+                        const providerName = task.provider_name ? String(task.provider_name).toLowerCase() : null;
+                        const providerLink = providerName
+                            ? buildProviderLink(providerName, userId === '{userId}' ? undefined : userId)
+                            : null;
 
-                    return {
-                        ...task,
-                        task_type: task.task_type || (providerName ? 'external' : 'direct'),
-                        provider_name: providerName || 'internal',
-                        link_url: providerLink || task.link_url || null
-                    };
-                })
+                        return {
+                            ...task,
+                            offer_virtual_currency: task.reward_coins ??
+                                task.reward_amount ??
+                                task.offer_virtual_currency ??
+                                task.coins ??
+                                task.payout ??
+                                0,
+                            task_type: task.task_type || (providerName ? 'external' : 'direct'),
+                            provider_name: providerName || 'internal',
+                            link_url: providerLink || task.link_url || null
+                        };
+                    }),
+                    ...managedTasks.map((task: any) => ({
+                        id: task.id,
+                        offer_title: task.title,
+                        offer_description: task.description,
+                        offer_type: task.provider_name,
+                        offer_virtual_currency: task.reward_coins,
+                        offer_image: task.image_url,
+                        offer_link: task.offer_url,
+                        task_type: 'external',
+                        provider_name: task.provider_name,
+                        source: 'admin_managed',
+                    })),
+                ]
             };
 
             res.status(200).json({ status: 'success', data: responseData });
@@ -98,10 +121,11 @@ export const TaskController = {
                 return res.status(401).send('0');
             }
 
-            const providerName = await TaskModel.getProviderNameBySecret(providerSecret);
-            if (!providerName) {
+            const provider = await TaskModel.getProviderBySecret(providerSecret);
+            if (!provider) {
                 return res.status(401).send('0');
             }
+            const providerName = String(provider.provider_name);
 
             if (!targetUserId) {
                 return res.status(400).send('0');
@@ -112,15 +136,21 @@ export const TaskController = {
                 return res.status(400).send('0');
             }
 
-            const rewardAmount = providerName.toLowerCase() === 'admantum'
-                ? ADMANTUM_REWARD_COINS
-                : Math.round(providerPayout);
+            const configuredReward = provider.reward_coins;
+            const rewardAmount = configuredReward !== null && configuredReward !== undefined
+                ? Number(configuredReward)
+                : providerName.toLowerCase() === 'admantum'
+                    ? ADMANTUM_REWARD_COINS
+                    : Math.round(providerPayout);
+            if (!Number.isSafeInteger(rewardAmount) || rewardAmount <= 0) {
+                return res.status(400).send('0');
+            }
 
             client = await pool.connect();
             await client.query('BEGIN');
 
             const userResult = await client.query(
-                'SELECT user_id FROM users WHERE user_id = $1 FOR UPDATE',
+                'SELECT user_id, is_active FROM users WHERE user_id = $1 FOR UPDATE',
                 [targetUserId]
             );
 
@@ -128,6 +158,10 @@ export const TaskController = {
                 console.warn('User Not Found:', targetUserId);
                 await client.query('ROLLBACK');
                 return res.status(404).send('0');
+            }
+            if (!userResult.rows[0].is_active) {
+                await client.query('ROLLBACK');
+                return res.status(403).send('0');
             }
 
             const updateResult = await client.query(

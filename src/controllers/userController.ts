@@ -19,6 +19,7 @@ const rankedEarningsQuery = `
                COALESCE(SUM(CASE WHEN t.amount > 0 THEN t.amount ELSE 0 END), 0) AS coins_earned
         FROM users u
         LEFT JOIN transactions t ON t.user_id = u.user_id
+        WHERE u.is_active = TRUE
         GROUP BY u.user_id, u.full_name
     ),
     ranked_users AS (
@@ -74,6 +75,13 @@ export const UserController = {
             const isMatch = await bcrypt.compare(password, user.password);
             if (!isMatch) {
                 return res.status(401).json({ status: 'error', message: 'Invalid Credentials!' });
+            }
+
+            if (user.is_active === false) {
+                return res.status(403).json({
+                    status: 'error',
+                    message: 'This account is currently suspended. Please contact support.',
+                });
             }
 
             return res.status(200).json({ status: 'success', user });
@@ -267,6 +275,13 @@ export const UserController = {
                     [name, email, device_id, refCode]
                 );
                 user = newUser;
+            }
+
+            if (user.rows[0].is_active === false) {
+                return res.status(403).json({
+                    status: 'error',
+                    message: 'This account is currently suspended. Please contact support.',
+                });
             }
 
             return res.status(200).json({ status: 'success', user: user.rows[0] });

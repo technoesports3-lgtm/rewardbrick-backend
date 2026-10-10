@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { UserController } from '../controllers/userController';
+import { activeUserGuard } from '../middlewares/activeUserGuard';
 
 const router = Router();
 
-router.get('/history/:userId', UserController.getWithdrawalHistory);
+router.get('/history/:userId', activeUserGuard, UserController.getWithdrawalHistory);
 
 router.patch('/:withdrawalId/status', (req, res, next) => {
 	const adminKey = process.env.ADMIN_API_KEY;

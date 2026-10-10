@@ -14,7 +14,8 @@ export const ensureProviderSchema = async () => {
     await pool.query(`
         ALTER TABLE tasks
             ADD COLUMN IF NOT EXISTS task_type TEXT NOT NULL DEFAULT 'direct',
-            ADD COLUMN IF NOT EXISTS provider_name TEXT DEFAULT 'internal';
+            ADD COLUMN IF NOT EXISTS provider_name TEXT DEFAULT 'internal',
+            ADD COLUMN IF NOT EXISTS reward_coins INTEGER;
     `);
 
     await pool.query(`
@@ -63,13 +64,62 @@ export const ensureProviderSchema = async () => {
     `);
 
     await pool.query(`
+        ALTER TABLE users
+            ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+        ALTER TABLE provider_configs
+            ADD COLUMN IF NOT EXISTS reward_coins INTEGER;
+        UPDATE provider_configs
+        SET reward_coins = 4000
+        WHERE provider_name = 'admantum' AND reward_coins IS NULL;
+        CREATE TABLE IF NOT EXISTS admin_managed_tasks (
+            id SERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            provider_name TEXT NOT NULL DEFAULT 'custom',
+            offer_url TEXT NOT NULL,
+            image_url TEXT NOT NULL DEFAULT '',
+            reward_coins INTEGER NOT NULL DEFAULT 0,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS admin_audit_log (
+            id BIGSERIAL PRIMARY KEY,
+            action TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            details JSONB NOT NULL DEFAULT '{}'::JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    `);
+
+    await pool.query(`
         INSERT INTO provider_configs (provider_name, base_url, secret_key)
         VALUES
-            ('cpx_research', 'https://offers.cpx-research.com/index.php?app_id=52007&ext_user_id={userId}', 'cpx_secret_777'),
-            ('admantum', 'https://offers.admantum.com/track?user_id={userId}', 'admantum_secret_777'),
-            ('gamezop', 'https://pwa.gamezop.com/g/RewardBrick', 'gamezop_secret_777')
+            ('cpx_research', 'https://offers.cpx-research.com/index.php?app_id=52007&ext_user_id={userId}', ''),
+            ('admantum', 'https://offers.admantum.com/track?user_id={userId}', ''),
+            ('gamezop', 'https://pwa.gamezop.com/g/RewardBrick', '')
         ON CONFLICT (provider_name) DO NOTHING;
     `);
+
+    await pool.query(
+        `UPDATE provider_configs SET secret_key = ''
+         WHERE secret_key IN ('cpx_secret_777', 'cpx_research_secret_777', 'admantum_secret_777')`
+    );
+
+    const providerSecrets = [
+        ['cpx_research', process.env.CPX_RESEARCH_POSTBACK_SECRET],
+        ['admantum', process.env.ADMANTUM_POSTBACK_SECRET],
+    ] as const;
+    for (const [providerName, secret] of providerSecrets) {
+        if (secret) {
+            await pool.query(
+                `UPDATE provider_configs SET secret_key = $1
+                 WHERE provider_name = $2 AND secret_key = ''`,
+                [secret, providerName]
+            );
+        }
+    }
 };
 
 pool.query('SELECT NOW()', (err, res) => {
@@ -81,7 +131,8 @@ pool.query('SELECT NOW()', (err, res) => {
     }
 });
 
-ensureProviderSchema().catch((error: Error) => {
+export const databaseReady = ensureProviderSchema();
+databaseReady.catch((error: Error) => {
     console.error('[DATABASE] Provider schema initialization failed:', error.message);
 });
 

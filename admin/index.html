@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>RewardBrick Admin</title>
+  <link rel="stylesheet" href="/admin/admin.css">
+  <script src="/admin/admin.js" defer></script>
+</head>
+<body>
+  <main id="login" class="login-shell hidden">
+    <form id="login-form" class="login-card">
+      <div class="brand-mark">RB</div>
+      <p class="eyebrow">REWARDBRICK</p>
+      <h1>Admin sign in</h1>
+      <p class="muted">Use the admin password configured on your backend.</p>
+      <label for="admin-password">Admin password</label>
+      <input id="admin-password" name="password" type="password" autocomplete="current-password" required>
+      <button class="button primary full" type="submit">Sign in securely</button>
+      <p id="login-error" class="error-text" role="alert"></p>
+    </form>
+  </main>
+
+  <div id="app" class="app-shell hidden">
+    <aside class="sidebar">
+      <a class="brand" href="/admin/"><span class="brand-mark">RB</span><span>RewardBrick<small>CONTROL CENTER</small></span></a>
+      <nav id="navigation">
+        <button class="nav-link active" data-page="overview"><span>▦</span> Overview</button>
+        <button class="nav-link" data-page="users"><span>♙</span> Users</button>
+        <button class="nav-link" data-page="tasks"><span>◇</span> Tasks &amp; rewards</button>
+        <button class="nav-link" data-page="withdrawals"><span>₹</span> Withdrawals</button>
+        <button class="nav-link" data-page="providers"><span>⚙</span> Providers</button>
+        <button class="nav-link" data-page="audit"><span>≡</span> Audit log</button>
+      </nav>
+      <div class="sidebar-foot"><span class="online-dot"></span> Private admin session</div>
+    </aside>
+
+    <section class="workspace">
+      <header class="topbar">
+        <div><p class="eyebrow">REWARDBRICK / ADMIN</p><h1 id="page-title">Overview</h1></div>
+        <button id="logout" class="button quiet" type="button">Sign out</button>
+      </header>
+      <div id="notice" class="notice hidden" role="status"></div>
+      <main id="content" class="content"></main>
+    </section>
+  </div>
+
+  <dialog id="task-dialog">
+    <form id="task-form" method="dialog" class="dialog-card">
+      <div class="dialog-heading"><div><p class="eyebrow">OFFER MANAGEMENT</p><h2 id="task-dialog-title">Add task</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+      <input type="hidden" name="id">
+      <label>Task name<input name="title" maxlength="120" required></label>
+      <label>Description<textarea name="description" maxlength="1000" rows="3"></textarea></label>
+      <label>Provider<select name="provider_name" required></select></label>
+      <label>Offer URL (HTTPS)<input name="offer_url" type="url" placeholder="https://" required></label>
+      <label>Image URL (optional)<input name="image_url" type="url" placeholder="https://"></label>
+      <label>Display reward in coins<input name="reward_coins" type="number" min="0" max="1000000" step="1" required></label>
+      <label class="check-label"><input name="is_active" type="checkbox" checked> Active and visible in the app</label>
+      <p class="muted small">External task completion and crediting still depends on the provider's verified postback.</p>
+      <div class="dialog-actions"><button class="button quiet" type="button" data-close-dialog>Cancel</button><button class="button primary" type="submit">Save task</button></div>
+    </form>
+  </dialog>
+</body>
+</html>
