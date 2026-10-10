@@ -74,6 +74,7 @@ td strong { font-size: 12px; }
 .badge { display: inline-flex; align-items: center; padding: 5px 8px; border-radius: 30px; background: var(--teal-soft); color: var(--teal-dark); font-weight: 700; font-size: 10px; }
 .badge.warn { color: #805612; background: #fff2d9; }
 .badge.off { background: #f1f3f5; color: #677680; }
+.color-chip { width: 12px; height: 12px; display: inline-block; vertical-align: -2px; border: 1px solid #d8e2e7; border-radius: 50%; }
 .empty { padding: 35px; text-align: center; color: var(--muted); font-size: 13px; }
 .pagination { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 14px; color: var(--muted); font-size: 12px; }
 .provider-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px; }

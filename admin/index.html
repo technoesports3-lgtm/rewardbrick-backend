@@ -29,6 +29,7 @@
         <button class="nav-link active" data-page="overview"><span>▦</span> Overview</button>
         <button class="nav-link" data-page="users"><span>♙</span> Users</button>
         <button class="nav-link" data-page="tasks"><span>◇</span> Tasks &amp; rewards</button>
+        <button class="nav-link" data-page="banners"><span>▣</span> Dashboard cards</button>
         <button class="nav-link" data-page="withdrawals"><span>₹</span> Withdrawals</button>
         <button class="nav-link" data-page="providers"><span>⚙</span> Providers</button>
         <button class="nav-link" data-page="audit"><span>≡</span> Audit log</button>
@@ -59,6 +60,23 @@
       <label class="check-label"><input name="is_active" type="checkbox" checked> Active and visible in the app</label>
       <p class="muted small">External task completion and crediting still depends on the provider's verified postback.</p>
       <div class="dialog-actions"><button class="button quiet" type="button" data-close-dialog>Cancel</button><button class="button primary" type="submit">Save task</button></div>
+    </form>
+  </dialog>
+  <dialog id="banner-dialog">
+    <form id="banner-form" method="dialog" class="dialog-card">
+      <div class="dialog-heading"><div><p class="eyebrow">DASHBOARD CONTENT</p><h2 id="banner-dialog-title">Add card</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+      <input type="hidden" name="id">
+      <label>Title<input name="title" maxlength="60" required></label>
+      <label>Subtitle<input name="subtitle" maxlength="140"></label>
+      <label>Icon<select name="icon_name">
+        <option value="people">People</option><option value="trophy">Trophy</option>
+        <option value="share">Share</option><option value="celebration">Celebration</option>
+        <option value="wallet">Wallet</option><option value="gift">Gift</option><option value="star">Star</option>
+      </select></label>
+      <label>Accent color<input name="accent_color" type="color" value="#00796b" required></label>
+      <label>Display order<input name="sort_order" type="number" min="0" max="10000" step="1" value="0" required></label>
+      <label class="check-label"><input name="is_active" type="checkbox" checked> Active and visible in the app</label>
+      <div class="dialog-actions"><button class="button quiet" type="button" data-close-banner-dialog>Cancel</button><button class="button primary" type="submit">Save card</button></div>
     </form>
   </dialog>
 </body>

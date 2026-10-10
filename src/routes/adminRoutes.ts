@@ -28,6 +28,10 @@ router.patch('/api/withdrawals/:withdrawalId', AdminController.updateWithdrawal)
 router.get('/api/tasks', AdminController.listTasks);
 router.post('/api/tasks', AdminController.saveTask);
 router.put('/api/tasks/:taskId', AdminController.saveTask);
+router.get('/api/banners', AdminController.listBanners);
+router.post('/api/banners', AdminController.saveBanner);
+router.put('/api/banners/:bannerId', AdminController.saveBanner);
+router.delete('/api/banners/:bannerId', AdminController.deleteBanner);
 router.get('/api/tasks/legacy', AdminController.listLegacyTasks);
 router.patch('/api/tasks/legacy/:taskId', AdminController.updateLegacyTask);
 router.get('/api/providers', AdminController.listProviders);

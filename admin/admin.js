@@ -6,11 +6,14 @@
   const title = document.querySelector("#page-title");
   const dialog = document.querySelector("#task-dialog");
   const taskForm = document.querySelector("#task-form");
+  const bannerDialog = document.querySelector("#banner-dialog");
+  const bannerForm = document.querySelector("#banner-form");
   const state = { page: "overview", userPage: 1, withdrawalPage: 1, providers: [] };
   const titles = {
     overview: "Overview",
     users: "Users",
     tasks: "Tasks & rewards",
+    banners: "Dashboard cards",
     withdrawals: "Withdrawals",
     providers: "Providers",
     audit: "Audit log",
@@ -348,6 +351,52 @@
       <td class="audit-details">${escapeHtml(JSON.stringify(event.details))}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">No admin actions recorded yet.</td></tr>`}</tbody></table></div></section>`;
   }
 
+  async function renderBanners() {
+    const { banners } = await api("/banners");
+    content.innerHTML = `
+      <div class="page-heading"><div><h2>App dashboard cards</h2><p>Active cards are shown in the home carousel after the app refreshes its dashboard.</p></div>
+        <button class="button primary" id="add-banner">Add card</button></div>
+      <section class="panel"><div class="table-wrap"><table><thead><tr><th>Card</th><th>Icon / color</th><th>Order</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>${banners.map((banner) => `<tr>
+        <td><strong>${escapeHtml(banner.title)}</strong><span class="subline">${escapeHtml(banner.subtitle)}</span></td>
+        <td>${escapeHtml(banner.icon_name)} <span class="color-chip" style="background:${escapeHtml(banner.accent_color)}"></span> ${escapeHtml(banner.accent_color)}</td>
+        <td>${number(banner.sort_order)}</td>
+        <td><span class="badge ${banner.is_active ? "" : "off"}">${banner.is_active ? "Active" : "Paused"}</span></td>
+        <td><div class="actions"><button class="button small-button" data-edit-banner="${banner.id}">Edit</button><button class="button small-button danger" data-delete-banner="${banner.id}">Delete</button></div></td>
+      </tr>`).join("") || `<tr><td colspan="5" class="empty">No dashboard cards yet.</td></tr>`}</tbody></table></div></section>`;
+    document.querySelector("#add-banner").addEventListener("click", () => openBannerDialog());
+    document.querySelectorAll("[data-edit-banner]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const banner = banners.find((item) => item.id === Number(button.dataset.editBanner));
+        if (banner) openBannerDialog(banner);
+      });
+    });
+    document.querySelectorAll("[data-delete-banner]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const banner = banners.find((item) => item.id === Number(button.dataset.deleteBanner));
+        if (!banner || !confirm(`Delete "${banner.title}" from the dashboard?`)) return;
+        try {
+          await api(`/banners/${banner.id}`, { method: "DELETE" });
+          notify("Dashboard card deleted.");
+          renderBanners().catch(showError);
+        } catch (error) { notify(error.message, true); }
+      });
+    });
+  }
+
+  function openBannerDialog(banner) {
+    bannerForm.reset();
+    bannerForm.elements.id.value = banner?.id || "";
+    bannerForm.elements.title.value = banner?.title || "";
+    bannerForm.elements.subtitle.value = banner?.subtitle || "";
+    bannerForm.elements.icon_name.value = banner?.icon_name || "celebration";
+    bannerForm.elements.accent_color.value = banner?.accent_color || "#00796b";
+    bannerForm.elements.sort_order.value = banner?.sort_order ?? 0;
+    bannerForm.elements.is_active.checked = banner?.is_active ?? true;
+    document.querySelector("#banner-dialog-title").textContent = banner ? "Edit card" : "Add card";
+    bannerDialog.showModal();
+  }
+
   function pagination(page, total, pageSize, attribute) {
     if (total === undefined) {
       return `<div class="pagination"><button class="button small-button" data-${attribute}="${page + 1}">Next page</button></div>`;
@@ -391,6 +440,7 @@
       overview: renderOverview,
       users: renderUsers,
       tasks: renderTasks,
+      banners: renderBanners,
       withdrawals: renderWithdrawals,
       providers: renderProviders,
       audit: renderAudit,
@@ -429,6 +479,31 @@
   document.querySelectorAll("[data-close-dialog]").forEach((button) =>
     button.addEventListener("click", () => dialog.close())
   );
+  document.querySelectorAll("[data-close-banner-dialog]").forEach((button) =>
+    button.addEventListener("click", () => bannerDialog.close())
+  );
+  bannerForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = new FormData(bannerForm);
+    const id = bannerForm.elements.id.value;
+    const body = {
+      title: values.get("title"),
+      subtitle: values.get("subtitle"),
+      icon_name: values.get("icon_name"),
+      accent_color: values.get("accent_color"),
+      sort_order: Number(values.get("sort_order")),
+      is_active: bannerForm.elements.is_active.checked,
+    };
+    try {
+      await api(id ? `/banners/${id}` : "/banners", {
+        method: id ? "PUT" : "POST",
+        body: JSON.stringify(body),
+      });
+      bannerDialog.close();
+      notify("Dashboard card saved.");
+      renderBanners().catch(showError);
+    } catch (error) { notify(error.message, true); }
+  });
   taskForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const values = new FormData(taskForm);

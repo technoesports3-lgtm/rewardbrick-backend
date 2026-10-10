@@ -72,6 +72,17 @@ const getLegacyTaskColumns = async (): Promise<{
 const columnExpression = (column: string | null, fallback: string): string =>
     column ? `"${column}"::TEXT` : fallback;
 
+const getUserColumns = async (): Promise<Set<string>> => {
+    const result = await pool.query(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema = current_schema() AND table_name = 'users'`
+    );
+    return new Set<string>(result.rows.map((row) => String(row.column_name)));
+};
+
+const quoteColumn = (column: string): string => `"${column.replace(/"/g, '""')}"`;
+const bannerIcons = new Set(['people', 'trophy', 'share', 'celebration', 'wallet', 'gift', 'star']);
+
 export const AdminController = {
     getSession: (_req: Request, res: Response) =>
         res.status(200).json({ status: 'success', authenticated: true }),
@@ -125,6 +136,128 @@ export const AdminController = {
         }
     },
 
+    listBanners: async (_req: Request, res: Response) => {
+        try {
+            const result = await pool.query(
+                `SELECT id, title, subtitle, icon_name, accent_color, sort_order,
+                        is_active, updated_at
+                 FROM dashboard_banners ORDER BY sort_order, id`
+            );
+            return res.status(200).json({ status: 'success', banners: result.rows });
+        } catch (error) {
+            console.error('Admin banner list failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not load dashboard cards.' });
+        }
+    },
+
+    getPublicBanners: async (_req: Request, res: Response) => {
+        try {
+            const result = await pool.query(
+                `SELECT id, title, subtitle, icon_name, accent_color, sort_order
+                 FROM dashboard_banners
+                 WHERE is_active = TRUE
+                 ORDER BY sort_order, id`
+            );
+            return res.status(200).json({ status: 'success', banners: result.rows });
+        } catch (error) {
+            console.error('Public dashboard banner list failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not load dashboard cards.' });
+        }
+    },
+
+    saveBanner: async (req: Request, res: Response) => {
+        const bannerId = req.params.bannerId ? Number(req.params.bannerId) : null;
+        const { title, subtitle, icon_name, accent_color, sort_order, is_active } = req.body ?? {};
+        const safeTitle = typeof title === 'string' ? title.trim() : '';
+        const safeSubtitle = typeof subtitle === 'string' ? subtitle.trim() : '';
+        const safeIcon = typeof icon_name === 'string' ? icon_name : '';
+        const safeColor = typeof accent_color === 'string' ? accent_color.toUpperCase() : '';
+
+        if ((bannerId !== null && (!Number.isSafeInteger(bannerId) || bannerId < 1)) ||
+            safeTitle.length < 2 || safeTitle.length > 60 ||
+            safeSubtitle.length > 140 ||
+            !bannerIcons.has(safeIcon) ||
+            !/^#[0-9A-F]{6}$/.test(safeColor) ||
+            !Number.isSafeInteger(sort_order) || sort_order < 0 || sort_order > 10000 ||
+            typeof is_active !== 'boolean') {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Check card title, subtitle, supported icon, color, order, and active status.',
+            });
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const saved = bannerId === null
+                ? await client.query(
+                    `INSERT INTO dashboard_banners
+                        (title, subtitle, icon_name, accent_color, sort_order, is_active)
+                     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+                    [safeTitle, safeSubtitle, safeIcon, safeColor, sort_order, is_active]
+                )
+                : await client.query(
+                    `UPDATE dashboard_banners
+                     SET title = $1, subtitle = $2, icon_name = $3, accent_color = $4,
+                         sort_order = $5, is_active = $6, updated_at = NOW()
+                     WHERE id = $7 RETURNING *`,
+                    [safeTitle, safeSubtitle, safeIcon, safeColor, sort_order, is_active, bannerId]
+                );
+            if (saved.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ status: 'error', message: 'Dashboard card not found.' });
+            }
+            await audit(client, bannerId === null ? 'banner_created' : 'banner_updated', 'dashboard_banner',
+                String(saved.rows[0].id), {
+                    title: safeTitle,
+                    sort_order,
+                    is_active,
+                });
+            await client.query('COMMIT');
+            return res.status(200).json({ status: 'success', banner: saved.rows[0] });
+        } catch (error) {
+            await client.query('ROLLBACK').catch((rollbackError: Error) => {
+                console.error('Admin banner save rollback failed:', rollbackError.message);
+            });
+            console.error('Admin banner save failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not save dashboard card.' });
+        } finally {
+            client.release();
+        }
+    },
+
+    deleteBanner: async (req: Request, res: Response) => {
+        const bannerId = Number(req.params.bannerId);
+        if (!Number.isSafeInteger(bannerId) || bannerId < 1) {
+            return res.status(400).json({ status: 'error', message: 'A valid card ID is required.' });
+        }
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const removed = await client.query(
+                'DELETE FROM dashboard_banners WHERE id = $1 RETURNING id, title',
+                [bannerId]
+            );
+            if (removed.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ status: 'error', message: 'Dashboard card not found.' });
+            }
+            await audit(client, 'banner_deleted', 'dashboard_banner', String(bannerId), {
+                title: removed.rows[0].title,
+            });
+            await client.query('COMMIT');
+            return res.status(200).json({ status: 'success' });
+        } catch (error) {
+            await client.query('ROLLBACK').catch((rollbackError: Error) => {
+                console.error('Admin banner delete rollback failed:', rollbackError.message);
+            });
+            console.error('Admin banner delete failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not delete dashboard card.' });
+        } finally {
+            client.release();
+        }
+    },
+
     listUsers: async (req: Request, res: Response) => {
         const page = validPage(req);
         const query = typeof req.query.q === 'string' ? req.query.q.trim().slice(0, 120) : '';
@@ -134,28 +267,58 @@ export const AdminController = {
         }
 
         try {
-            const result = await pool.query(
-                `SELECT user_id, full_name, email, wallet_balance, is_active, created_at
-                 FROM users
-                 WHERE ($1 = '' OR user_id ILIKE '%' || $1 || '%'
-                        OR full_name ILIKE '%' || $1 || '%'
-                        OR email ILIKE '%' || $1 || '%')
-                   AND ($2 = 'all' OR ($2 = 'active' AND is_active)
-                        OR ($2 = 'suspended' AND NOT is_active))
-                 ORDER BY created_at DESC
-                 LIMIT $3 OFFSET $4`,
-                [query, status, page.limit, page.offset]
-            );
-            const count = await pool.query(
-                `SELECT COUNT(*) AS total
-                 FROM users
-                 WHERE ($1 = '' OR user_id ILIKE '%' || $1 || '%'
-                        OR full_name ILIKE '%' || $1 || '%'
-                        OR email ILIKE '%' || $1 || '%')
-                   AND ($2 = 'all' OR ($2 = 'active' AND is_active)
-                        OR ($2 = 'suspended' AND NOT is_active))`,
-                [query, status]
-            );
+            const columns = await getUserColumns();
+            const userId = ['user_id', 'id', 'uid'].find((column) => columns.has(column));
+            if (!userId) {
+                return res.status(503).json({
+                    status: 'error',
+                    message: 'Users cannot be displayed: the database users table is missing user_id (or id).',
+                });
+            }
+
+            const name = ['full_name', 'name', 'display_name'].find((column) => columns.has(column));
+            const email = ['email', 'email_address'].find((column) => columns.has(column));
+            const balance = ['wallet_balance', 'balance', 'coins'].find((column) => columns.has(column));
+            const createdAt = ['created_at', 'createdAt', 'joined_at'].find((column) => columns.has(column));
+            const active = columns.has('is_active') ? 'is_active' : null;
+            if (status !== 'all' && !active) {
+                return res.status(503).json({
+                    status: 'error',
+                    message: 'User status is not available: the users table is missing is_active.',
+                });
+            }
+
+            const searchColumns = [userId, name, email].filter((column): column is string => column !== undefined);
+            const searchClause = query
+                ? `(${searchColumns.map((column) => `${quoteColumn(column)}::TEXT ILIKE '%' || $1 || '%'`).join(' OR ')})`
+                : 'TRUE';
+            const statusClause = !active || status === 'all'
+                ? 'TRUE'
+                : status === 'active'
+                    ? `${quoteColumn(active)} = TRUE`
+                    : `${quoteColumn(active)} = FALSE`;
+            const orderColumn = createdAt ?? userId;
+
+            const [result, count] = await Promise.all([
+                pool.query(
+                    `SELECT ${quoteColumn(userId)}::TEXT AS user_id,
+                            ${columnExpression(name ?? null, "''")} AS full_name,
+                            ${columnExpression(email ?? null, "''")} AS email,
+                            ${columnExpression(balance ?? null, '0')} AS wallet_balance,
+                            ${active ? quoteColumn(active) : 'TRUE'} AS is_active,
+                            ${createdAt ? quoteColumn(createdAt) : 'NULL'} AS created_at
+                     FROM users
+                     WHERE ${searchClause} AND ${statusClause}
+                     ORDER BY ${quoteColumn(orderColumn)} DESC
+                     LIMIT $2 OFFSET $3`,
+                    [query, page.limit, page.offset]
+                ),
+                pool.query(
+                    `SELECT COUNT(*) AS total FROM users
+                     WHERE ${searchClause} AND ${statusClause}`,
+                    [query]
+                ),
+            ]);
             return res.status(200).json({
                 status: 'success',
                 users: result.rows,
@@ -165,7 +328,12 @@ export const AdminController = {
             });
         } catch (error) {
             console.error('Admin user search failed:', error);
-            return res.status(500).json({ status: 'error', message: 'Could not load users.' });
+            return res.status(500).json({
+                status: 'error',
+                message: error instanceof Error
+                    ? `Could not load users: ${error.message}`
+                    : 'Could not load users because of a database error.',
+            });
         }
     },
 

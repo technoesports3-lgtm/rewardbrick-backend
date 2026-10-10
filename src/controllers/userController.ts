@@ -93,13 +93,32 @@ export const UserController = {
     getUserProfile: async (req: Request, res: Response) => {
         try {
             const userId = req.params.userId as string;
-            const user = await UserModel.findById(userId);
+            const [user, statsResult] = await Promise.all([
+                UserModel.findById(userId),
+                pool.query(
+                    `SELECT COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0) AS coins_earned,
+                            COALESCE(SUM(ABS(amount)) FILTER (WHERE amount < 0), 0) AS coins_redeemed,
+                            COUNT(*) FILTER (
+                                WHERE transaction_type IN ('task', 'offerwall_completion', 'daily_bonus')
+                                   OR source ILIKE '%offer%'
+                            ) AS offers_completed
+                     FROM transactions
+                     WHERE user_id = $1`,
+                    [userId]
+                ),
+            ]);
 
             if (!user) {
                 return res.status(404).json({ error: 'User not found' });
             }
 
-            return res.status(200).json({ status: 'success', user });
+            const stats = {
+                coins_earned: toNumber(statsResult.rows[0]?.coins_earned ?? 0),
+                coins_redeemed: toNumber(statsResult.rows[0]?.coins_redeemed ?? 0),
+                offers_completed: toNumber(statsResult.rows[0]?.offers_completed ?? 0),
+                referrals: 0,
+            };
+            return res.status(200).json({ status: 'success', user, stats });
         } catch (e: any) {
             return res.status(500).json({ error: e.message });
         }

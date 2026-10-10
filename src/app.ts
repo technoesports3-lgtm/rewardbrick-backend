@@ -8,6 +8,7 @@ import taskRoutes from './routes/taskRoutes';
 import walletRoutes from './routes/walletRoutes';
 import withdrawalRoutes from './routes/withdrawalRoutes';
 import adminRoutes from './routes/adminRoutes';
+import dashboardRoutes from './routes/dashboardRoutes';
 
 // 1. Environment variables load & DB connection
 dotenv.config();
@@ -43,6 +44,7 @@ app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/tasks', taskRoutes);
 app.use('/api/v1/wallet', walletRoutes);
 app.use('/api/v1/withdrawals', withdrawalRoutes);
+app.use('/api/v1/dashboard', dashboardRoutes);
 
 // ==========================================
 // 🏁 SERVER INITIALIZATION (Only One Listen!)

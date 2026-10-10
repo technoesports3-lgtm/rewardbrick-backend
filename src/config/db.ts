@@ -91,7 +91,41 @@ export const ensureProviderSchema = async () => {
             details JSONB NOT NULL DEFAULT '{}'::JSONB,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+        CREATE TABLE IF NOT EXISTS dashboard_banners (
+            id SERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            subtitle TEXT NOT NULL DEFAULT '',
+            icon_name TEXT NOT NULL DEFAULT 'celebration',
+            accent_color TEXT NOT NULL DEFAULT '#087D74',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS dashboard_banner_seed (
+            id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
+            seeded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
     `);
+
+    const bannerSeed = await pool.query(
+        `INSERT INTO dashboard_banner_seed DEFAULT VALUES
+         ON CONFLICT DO NOTHING RETURNING id`
+    );
+    if (bannerSeed.rowCount) {
+        await pool.query(`
+            INSERT INTO dashboard_banners
+                (title, subtitle, icon_name, accent_color, sort_order, is_active)
+            SELECT defaults.title, defaults.subtitle, defaults.icon_name,
+                   defaults.accent_color, defaults.sort_order, TRUE
+            FROM (VALUES
+                ('REFERRAL CONTEST', 'Invite friends and unlock bonus coins.', 'people', '#00796B', 0),
+                ('REFERRAL CONTEST', 'Your network could be your next reward.', 'trophy', '#AD1457', 1),
+                ('REFERRAL CONTEST', 'Share. Earn. Repeat.', 'share', '#EF6C00', 2)
+            ) AS defaults(title, subtitle, icon_name, accent_color, sort_order)
+            WHERE NOT EXISTS (SELECT 1 FROM dashboard_banners)
+        `);
+    }
 
     await pool.query(`
         INSERT INTO provider_configs (provider_name, base_url, secret_key)
