@@ -93,30 +93,40 @@ export const UserController = {
     getUserProfile: async (req: Request, res: Response) => {
         try {
             const userId = req.params.userId as string;
-            const [user, statsResult] = await Promise.all([
-                UserModel.findById(userId),
-                pool.query(
-                    `SELECT COALESCE(SUM(amount) FILTER (WHERE amount > 0), 0) AS coins_earned,
-                            COALESCE(SUM(ABS(amount)) FILTER (WHERE amount < 0), 0) AS coins_redeemed,
-                            COUNT(*) FILTER (
-                                WHERE transaction_type IN ('task', 'offerwall_completion', 'daily_bonus')
-                                   OR source ILIKE '%offer%'
-                            ) AS offers_completed
-                     FROM transactions
-                     WHERE user_id = $1`,
-                    [userId]
-                ),
-            ]);
+            const result = await pool.query(
+                `SELECT u.user_id, u.email, u.full_name, u.wallet_balance,
+                        u.referral_code, u.created_at,
+                        COALESCE(SUM(t.amount) FILTER (WHERE t.amount > 0), 0) AS coins_earned,
+                        COALESCE(SUM(ABS(t.amount)) FILTER (WHERE t.amount < 0), 0) AS coins_redeemed,
+                        COUNT(*) FILTER (
+                            WHERE t.transaction_type IN ('task', 'offerwall_completion', 'daily_bonus')
+                               OR t.source ILIKE '%offer%'
+                        ) AS offers_completed
+                 FROM users u
+                 LEFT JOIN transactions t ON t.user_id = u.user_id
+                 WHERE u.user_id = $1
+                 GROUP BY u.user_id`,
+                [userId]
+            );
 
-            if (!user) {
+            if (result.rowCount === 0) {
                 return res.status(404).json({ error: 'User not found' });
             }
 
+            const profile = result.rows[0];
             const stats = {
-                coins_earned: toNumber(statsResult.rows[0]?.coins_earned ?? 0),
-                coins_redeemed: toNumber(statsResult.rows[0]?.coins_redeemed ?? 0),
-                offers_completed: toNumber(statsResult.rows[0]?.offers_completed ?? 0),
+                coins_earned: toNumber(profile.coins_earned),
+                coins_redeemed: toNumber(profile.coins_redeemed),
+                offers_completed: toNumber(profile.offers_completed),
                 referrals: 0,
+            };
+            const user = {
+                user_id: profile.user_id,
+                email: profile.email,
+                full_name: profile.full_name,
+                wallet_balance: profile.wallet_balance,
+                referral_code: profile.referral_code,
+                created_at: profile.created_at,
             };
             return res.status(200).json({ status: 'success', user, stats });
         } catch (e: any) {
@@ -327,7 +337,10 @@ export const UserController = {
         try {
             const userId = req.params.userId as string;
             const result = await pool.query(
-                `SELECT * FROM withdrawals WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20`,
+                `SELECT w.*, rc.title AS card_title, rc.denomination_inr
+                 FROM withdrawals w
+                 LEFT JOIN redeem_cards rc ON rc.id = w.redeem_card_id
+                 WHERE w.user_id = $1 ORDER BY w.created_at DESC LIMIT 20`,
                 [userId]
             );
 
@@ -337,26 +350,30 @@ export const UserController = {
         }
     },
 
-    requestWithdrawal: async (req: Request, res: Response) => {
+    requestRedemption: async (req: Request, res: Response) => {
         const client = await pool.connect();
         try {
-            const { user_id, userId, amount_coins, upi_id, method } = req.body;
+            const { user_id, userId, redeem_card_id } = req.body;
             const targetUserId = String(user_id || userId || '');
-            const targetAmount = toNumber(amount_coins ?? 0);
-            const upi = String(upi_id || '').trim();
-            const selectedMethod = String(method || 'upi');
+            const cardId = Number(redeem_card_id);
 
-            if (!targetUserId) {
-                return res.status(400).json({ status: 'error', message: 'User ID required' });
-            }
-            if (targetAmount < 50) {
-                return res.status(400).json({ status: 'error', message: 'Minimum withdrawal is 50 coins' });
-            }
-            if (selectedMethod === 'upi' && !upi) {
-                return res.status(400).json({ status: 'error', message: 'UPI ID is required' });
+            if (!targetUserId || !Number.isSafeInteger(cardId) || cardId < 1) {
+                return res.status(400).json({ status: 'error', message: 'A user and valid redemption card are required.' });
             }
 
             await client.query('BEGIN');
+
+            const cardResult = await client.query(
+                `SELECT id, title, denomination_inr, coins_required, minimum_coins
+                 FROM redeem_cards WHERE id = $1 AND is_active = TRUE FOR SHARE`,
+                [cardId]
+            );
+            if (cardResult.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ status: 'error', message: 'This redemption card is no longer available.' });
+            }
+            const card = cardResult.rows[0];
+            const targetAmount = toNumber(card.coins_required);
 
             const userResult = await client.query(
                 'SELECT wallet_balance FROM users WHERE user_id = $1 FOR UPDATE',
@@ -368,6 +385,13 @@ export const UserController = {
             }
 
             const currentBalance = toNumber(userResult.rows[0].wallet_balance ?? 0);
+            if (currentBalance < toNumber(card.minimum_coins)) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    status: 'error',
+                    message: `This card requires at least ${card.minimum_coins} coins in your wallet.`,
+                });
+            }
             if (currentBalance < targetAmount) {
                 await client.query('ROLLBACK');
                 return res.status(400).json({ status: 'error', message: 'Insufficient wallet balance' });
@@ -380,21 +404,22 @@ export const UserController = {
             const newBalance = toNumber(updateResult.rows[0]?.wallet_balance ?? 0);
 
             const withdrawalResult = await client.query(
-                `INSERT INTO withdrawals (user_id, amount_coins, method, upi_id, status)
-                 VALUES ($1, $2, $3, $4, 'pending') RETURNING *`,
-                [targetUserId, targetAmount, selectedMethod, upi || null]
+                `INSERT INTO withdrawals
+                    (user_id, amount_coins, method, redeem_card_id, status)
+                 VALUES ($1, $2, 'gift_card', $3, 'pending') RETURNING *`,
+                [targetUserId, targetAmount, cardId]
             );
 
             await client.query(
                 'INSERT INTO transactions (user_id, amount, transaction_type, source, balance_after) VALUES ($1, $2, $3, $4, $5)',
-                [targetUserId, -targetAmount, 'withdrawal', 'Withdrawal Request', newBalance]
+                [targetUserId, -targetAmount, 'withdrawal', `Gift card redemption: ${card.title}`, newBalance]
             );
 
             await client.query('COMMIT');
 
             return res.status(200).json({
                 status: 'success',
-                message: 'Withdrawal request submitted successfully',
+                message: 'Redemption request submitted. The admin will send your voucher after review.',
                 withdrawal: withdrawalResult.rows[0],
                 new_balance: newBalance,
             });
@@ -411,11 +436,15 @@ export const UserController = {
         try {
             const withdrawalId = Number(req.params.withdrawalId);
             const { status } = req.body;
+            const voucherReference = typeof req.body?.voucher_reference === 'string'
+                ? req.body.voucher_reference.trim()
+                : '';
 
-            if (!Number.isInteger(withdrawalId) || !['completed', 'failed'].includes(status)) {
+            if (!Number.isInteger(withdrawalId) || !['completed', 'failed'].includes(status) ||
+                (status === 'completed' && (voucherReference.length < 4 || voucherReference.length > 500))) {
                 return res.status(400).json({
                     status: 'error',
-                    message: 'A valid withdrawal ID and completed or failed status are required',
+                    message: 'A valid withdrawal ID and status are required; voucher code/reference is required to complete a redemption.',
                 });
             }
 
@@ -457,9 +486,12 @@ export const UserController = {
             }
 
             const updatedResult = await client.query(
-                `UPDATE withdrawals SET status = $1, completed_at = NOW()
-                 WHERE id = $2 RETURNING *`,
-                [status, withdrawalId]
+                `UPDATE withdrawals
+                 SET status = $1,
+                     voucher_reference = CASE WHEN $1 = 'completed' THEN $2 ELSE voucher_reference END,
+                     completed_at = NOW()
+                 WHERE id = $3 RETURNING *`,
+                [status, voucherReference, withdrawalId]
             );
             await client.query('COMMIT');
 

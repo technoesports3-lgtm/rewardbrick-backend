@@ -8,13 +8,20 @@
   const taskForm = document.querySelector("#task-form");
   const bannerDialog = document.querySelector("#banner-dialog");
   const bannerForm = document.querySelector("#banner-form");
+  const affiliateDialog = document.querySelector("#affiliate-dialog");
+  const affiliateForm = document.querySelector("#affiliate-form");
+  const redeemCardDialog = document.querySelector("#redeem-card-dialog");
+  const redeemCardForm = document.querySelector("#redeem-card-form");
   const state = { page: "overview", userPage: 1, withdrawalPage: 1, providers: [] };
   const titles = {
     overview: "Overview",
     users: "Users",
     tasks: "Tasks & rewards",
-    banners: "Dashboard cards",
-    withdrawals: "Withdrawals",
+    banners: "Posters",
+    affiliate: "Affiliate posts",
+    "redeem-cards": "Redeem cards",
+    withdrawals: "Redemption requests",
+    "app-content": "App information",
     providers: "Providers",
     audit: "Audit log",
   };
@@ -261,16 +268,16 @@
     const query = new URLSearchParams({ page: String(state.withdrawalPage), limit: "20", status });
     const data = await api(`/withdrawals?${query}`);
     content.innerHTML = `
-      <div class="page-heading"><div><h2>Payout queue</h2><p>Review withdrawal requests. Failed requests refund the user's coins automatically.</p></div>
+      <div class="page-heading"><div><h2>Gift-card redemption queue</h2><p>Review requests by user. Add the voucher code/reference when you have sent the gift card; failed requests refund coins.</p></div>
         <div class="toolbar"><select id="withdrawal-status"><option value="pending">Pending</option><option value="completed">Completed</option><option value="failed">Failed</option><option value="all">All</option></select></div>
       </div>
       <section class="panel"><div class="table-wrap"><table><thead><tr><th>User</th><th>Coins</th><th>Method / destination</th><th>Requested</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>${data.withdrawals.map((item) => `<tr>
         <td><strong>${escapeHtml(item.full_name || "User")}</strong><span class="subline">${escapeHtml(item.email || item.user_id)}</span></td>
         <td>${number(item.amount_coins)} coins</td>
-        <td>${escapeHtml(item.method)}<span class="subline">${escapeHtml(item.upi_id || "No UPI destination")}</span></td>
+        <td>${escapeHtml(item.card_title || item.method)}<span class="subline">₹${number(item.denomination_inr)} card · ${number(item.amount_coins)} coins</span>${item.voucher_reference ? `<span class="subline">Voucher: ${escapeHtml(item.voucher_reference)}</span>` : ""}</td>
         <td>${escapeHtml(date(item.created_at))}</td><td><span class="badge ${item.status === "pending" ? "warn" : item.status === "failed" ? "off" : ""}">${escapeHtml(item.status)}</span></td>
-        <td>${item.status === "pending" ? `<div class="actions"><button class="button small-button" data-withdrawal="${item.id}" data-next="completed">Mark paid</button><button class="button small-button danger" data-withdrawal="${item.id}" data-next="failed">Fail &amp; refund</button></div>` : "—"}</td>
+        <td>${item.status === "pending" ? `<div class="actions"><button class="button small-button" data-withdrawal="${item.id}" data-next="completed">Send voucher</button><button class="button small-button danger" data-withdrawal="${item.id}" data-next="failed">Fail &amp; refund</button></div>` : "—"}</td>
       </tr>`).join("") || `<tr><td colspan="6" class="empty">No withdrawal requests found.</td></tr>`}</tbody></table></div>
       ${pagination(state.withdrawalPage, data.total, 20, "withdrawal-page")}</section>`;
     document.querySelector("#withdrawal-status").value = status;
@@ -281,15 +288,23 @@
     document.querySelectorAll("[data-withdrawal]").forEach((button) => {
       button.addEventListener("click", async () => {
         const next = button.dataset.next;
-        if (!confirm(next === "completed"
-          ? "Confirm that this payout has actually been sent?"
-          : "Mark this request failed and refund the coins to the user?")) return;
-        try {
-          await api(`/withdrawals/${button.dataset.withdrawal}`, {
-            method: "PATCH",
-            body: JSON.stringify({ status: next }),
-          });
-          notify(next === "failed" ? "Withdrawal failed; coins were refunded." : "Withdrawal marked as paid.");
+      const voucherReference = next === "completed"
+        ? prompt("Enter the voucher code/reference that you have sent to this user:")
+        : "";
+      if (next === "completed" && voucherReference === null) return;
+      if (next === "completed" && voucherReference.trim().length < 4) {
+        notify("Enter the voucher code/reference before completing the request.", true);
+        return;
+      }
+      if (!confirm(next === "completed"
+        ? "Confirm that this voucher has been sent to the user?"
+        : "Mark this request failed and refund the coins to the user?")) return;
+      try {
+        await api(`/withdrawals/${button.dataset.withdrawal}`, {
+          method: "PATCH",
+          body: JSON.stringify({ status: next, voucher_reference: voucherReference }),
+        });
+        notify(next === "failed" ? "Request failed; coins were refunded." : "Voucher recorded and request completed.");
           renderWithdrawals().catch(showError);
         } catch (error) { notify(error.message, true); }
       });
@@ -317,7 +332,7 @@
             <button class="button primary" type="submit">Save provider</button>
           </form>
         </article>`).join("")}</section>
-      <section class="panel"><h3>Conversion reminder</h3><p class="muted small">Current business rule: 100 coins = ₹1; AdMantum defaults to 4,000 coins per valid completion (₹40). If you change a provider reward, verify its real payout and task terms first.</p></section>`;
+      <section class="panel"><h3>Conversion reminder</h3><p class="muted small">Current business rule: 10 coins = ₹1; AdMantum defaults to 400 coins per valid completion (₹40). If you change a provider reward, verify its real payout and task terms first.</p></section>`;
     document.querySelectorAll("[data-provider]").forEach((form) => {
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -351,19 +366,142 @@
       <td class="audit-details">${escapeHtml(JSON.stringify(event.details))}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">No admin actions recorded yet.</td></tr>`}</tbody></table></div></section>`;
   }
 
+  async function renderAffiliatePosts() {
+    const { posts } = await api("/affiliate-posts");
+    content.innerHTML = `
+      <div class="page-heading"><div><h2>Affiliate marketing</h2><p>Only posts created here are shown in the app. Add real product text, imagery and tracked destination links.</p></div>
+        <button class="button primary" id="add-affiliate-post">Add post</button></div>
+      <section class="panel"><div class="table-wrap"><table><thead><tr><th>Post</th><th>Destination</th><th>Order</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>${posts.map((post) => `<tr>
+        <td><strong>${escapeHtml(post.title)}</strong><span class="subline">${escapeHtml(post.message)}</span>${post.image_url ? `<span class="subline">Image configured</span>` : ""}</td>
+        <td class="audit-details">${escapeHtml(post.destination_url)}</td><td>${number(post.sort_order)}</td>
+        <td><span class="badge ${post.is_active ? "" : "off"}">${post.is_active ? "Active" : "Paused"}</span></td>
+        <td><div class="actions"><button class="button small-button" data-edit-affiliate="${post.id}">Edit</button><button class="button small-button danger" data-delete-affiliate="${post.id}">Delete</button></div></td>
+      </tr>`).join("") || `<tr><td colspan="5" class="empty">No affiliate posts created. Add verified content to publish it to the app.</td></tr>`}</tbody></table></div></section>`;
+    document.querySelector("#add-affiliate-post").addEventListener("click", () => openAffiliateDialog());
+    document.querySelectorAll("[data-edit-affiliate]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const post = posts.find((item) => item.id === Number(button.dataset.editAffiliate));
+        if (post) openAffiliateDialog(post);
+      });
+    });
+    document.querySelectorAll("[data-delete-affiliate]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const post = posts.find((item) => item.id === Number(button.dataset.deleteAffiliate));
+        if (!post || !confirm(`Delete "${post.title}"?`)) return;
+        try {
+          await api(`/affiliate-posts/${post.id}`, { method: "DELETE" });
+          notify("Affiliate post deleted.");
+          renderAffiliatePosts().catch(showError);
+        } catch (error) { notify(error.message, true); }
+      });
+    });
+  }
+
+  function openAffiliateDialog(post) {
+    affiliateForm.reset();
+    affiliateForm.elements.id.value = post?.id || "";
+    affiliateForm.elements.title.value = post?.title || "";
+    affiliateForm.elements.message.value = post?.message || "";
+    affiliateForm.elements.image_url.value = post?.image_url || "";
+    affiliateForm.elements.destination_url.value = post?.destination_url || "";
+    affiliateForm.elements.sort_order.value = post?.sort_order ?? 0;
+    affiliateForm.elements.is_active.checked = post?.is_active ?? true;
+    document.querySelector("#affiliate-dialog-title").textContent = post ? "Edit post" : "Add post";
+    affiliateDialog.showModal();
+  }
+
+  async function renderRedeemCards() {
+    const { cards } = await api("/redeem-cards");
+    content.innerHTML = `
+      <div class="page-heading"><div><h2>Gift-card catalog</h2><p>Active cards are offered in the app. Conversion is 10 coins per ₹1; fulfilled vouchers are entered in the redemption queue.</p></div>
+        <button class="button primary" id="add-redeem-card">Add gift card</button></div>
+      <section class="panel"><div class="table-wrap"><table><thead><tr><th>Provider</th><th>Value</th><th>Coins</th><th>Minimum balance</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>${cards.map((card) => `<tr>
+        <td><strong>${escapeHtml(card.title)}</strong></td><td>₹${number(card.denomination_inr)}</td>
+        <td>${number(card.coins_required)}</td><td>${number(card.minimum_coins)}</td>
+        <td><span class="badge ${card.is_active ? "" : "off"}">${card.is_active ? "Available" : "Paused"}</span></td>
+        <td>${card.is_active ? `<div class="actions"><button class="button small-button" data-edit-redeem-card="${card.id}">Edit</button><button class="button small-button danger" data-disable-redeem-card="${card.id}">Disable</button></div>` : "—"}</td>
+      </tr>`).join("") || `<tr><td colspan="6" class="empty">No gift cards configured. Add only vouchers you can fulfill.</td></tr>`}</tbody></table></div></section>`;
+    document.querySelector("#add-redeem-card").addEventListener("click", () => openRedeemCardDialog());
+    document.querySelectorAll("[data-edit-redeem-card]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const card = cards.find((item) => item.id === Number(button.dataset.editRedeemCard));
+        if (card) openRedeemCardDialog(card);
+      });
+    });
+    document.querySelectorAll("[data-disable-redeem-card]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const card = cards.find((item) => item.id === Number(button.dataset.disableRedeemCard));
+        if (!card || !confirm(`Stop offering "${card.title}"? Existing requests are not changed.`)) return;
+        try {
+          await api(`/redeem-cards/${card.id}`, { method: "DELETE" });
+          notify("Gift card disabled.");
+          renderRedeemCards().catch(showError);
+        } catch (error) { notify(error.message, true); }
+      });
+    });
+  }
+
+  async function renderAppContent() {
+    const { content: items = [] } = await api("/app-content");
+    const values = Object.fromEntries(items.map((item) => [item.content_key, item.content]));
+    const sections = [
+      ["terms", "Terms & conditions", "Published terms displayed in the app profile."],
+      ["about", "About us", "Published About Us information displayed in the app profile."],
+      ["support_email", "Support email", "Used by the app's Bug report action. Leave blank to disable it."],
+      ["store_url", "App store URL", "HTTPS Play Store or App Store URL used by Rate us. Leave blank to disable it."],
+    ];
+    content.innerHTML = `
+      <div class="page-heading"><div><h2>App information</h2><p>Only content entered here is shown to users; blank content stays unpublished.</p></div></div>
+      <section class="provider-grid">${sections.map(([key, label, help]) => `
+        <article class="provider-card"><h3>${escapeHtml(label)}</h3>
+          <form data-app-content="${key}">
+            <label>${escapeHtml(help)}<textarea name="content" rows="${key === "terms" || key === "about" ? "8" : "2"}" maxlength="20000">${escapeHtml(values[key] || "")}</textarea></label>
+            <button class="button primary" type="submit">Save ${escapeHtml(label.toLowerCase())}</button>
+          </form>
+        </article>`).join("")}</section>`;
+    document.querySelectorAll("[data-app-content]").forEach((form) => {
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        try {
+          await api(`/app-content/${encodeURIComponent(form.dataset.appContent)}`, {
+            method: "PUT",
+            body: JSON.stringify({ content: form.elements.content.value }),
+          });
+          notify(`${form.dataset.appContent.replaceAll("_", " ")} saved.`);
+          renderAppContent().catch(showError);
+        } catch (error) { notify(error.message, true); }
+      });
+    });
+  }
+
+  function openRedeemCardDialog(card) {
+    redeemCardForm.reset();
+    redeemCardForm.elements.id.value = card?.id || "";
+    redeemCardForm.elements.title.value = card?.title || "";
+    redeemCardForm.elements.denomination_inr.value = card?.denomination_inr || "";
+    redeemCardForm.elements.minimum_coins.value = card?.minimum_coins ?? 1000;
+    redeemCardForm.elements.sort_order.value = card?.sort_order ?? 0;
+    redeemCardForm.elements.is_active.checked = card?.is_active ?? true;
+    document.querySelector("#redeem-card-dialog-title").textContent = card ? "Edit gift card" : "Add gift card";
+    redeemCardDialog.showModal();
+  }
+
   async function renderBanners() {
     const { banners } = await api("/banners");
     content.innerHTML = `
-      <div class="page-heading"><div><h2>App dashboard cards</h2><p>Active cards are shown in the home carousel after the app refreshes its dashboard.</p></div>
-        <button class="button primary" id="add-banner">Add card</button></div>
-      <section class="panel"><div class="table-wrap"><table><thead><tr><th>Card</th><th>Icon / color</th><th>Order</th><th>Status</th><th>Actions</th></tr></thead>
+      <div class="page-heading"><div><h2>App posters</h2><p>Active posters configured here are shown in the app home carousel. Empty catalog means no poster placeholder.</p></div>
+        <button class="button primary" id="add-banner">Add poster</button></div>
+      <section class="panel"><div class="table-wrap"><table><thead><tr><th>Poster</th><th>Image / destination</th><th>Color</th><th>Order</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>${banners.map((banner) => `<tr>
         <td><strong>${escapeHtml(banner.title)}</strong><span class="subline">${escapeHtml(banner.subtitle)}</span></td>
+        <td>${banner.image_url ? "Image configured" : "No image"}${banner.target_url ? `<span class="subline">Tap destination configured</span>` : ""}</td>
         <td>${escapeHtml(banner.icon_name)} <span class="color-chip" style="background:${escapeHtml(banner.accent_color)}"></span> ${escapeHtml(banner.accent_color)}</td>
         <td>${number(banner.sort_order)}</td>
         <td><span class="badge ${banner.is_active ? "" : "off"}">${banner.is_active ? "Active" : "Paused"}</span></td>
         <td><div class="actions"><button class="button small-button" data-edit-banner="${banner.id}">Edit</button><button class="button small-button danger" data-delete-banner="${banner.id}">Delete</button></div></td>
-      </tr>`).join("") || `<tr><td colspan="5" class="empty">No dashboard cards yet.</td></tr>`}</tbody></table></div></section>`;
+      </tr>`).join("") || `<tr><td colspan="6" class="empty">No posters created. Add approved poster content here.</td></tr>`}</tbody></table></div></section>`;
     document.querySelector("#add-banner").addEventListener("click", () => openBannerDialog());
     document.querySelectorAll("[data-edit-banner]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -393,7 +531,9 @@
     bannerForm.elements.accent_color.value = banner?.accent_color || "#00796b";
     bannerForm.elements.sort_order.value = banner?.sort_order ?? 0;
     bannerForm.elements.is_active.checked = banner?.is_active ?? true;
-    document.querySelector("#banner-dialog-title").textContent = banner ? "Edit card" : "Add card";
+    bannerForm.elements.image_url.value = banner?.image_url || "";
+    bannerForm.elements.target_url.value = banner?.target_url || "";
+    document.querySelector("#banner-dialog-title").textContent = banner ? "Edit poster" : "Add poster";
     bannerDialog.showModal();
   }
 
@@ -441,7 +581,10 @@
       users: renderUsers,
       tasks: renderTasks,
       banners: renderBanners,
+      affiliate: renderAffiliatePosts,
+      "redeem-cards": renderRedeemCards,
       withdrawals: renderWithdrawals,
+      "app-content": renderAppContent,
       providers: renderProviders,
       audit: renderAudit,
     };
@@ -482,6 +625,12 @@
   document.querySelectorAll("[data-close-banner-dialog]").forEach((button) =>
     button.addEventListener("click", () => bannerDialog.close())
   );
+  document.querySelectorAll("[data-close-affiliate-dialog]").forEach((button) =>
+    button.addEventListener("click", () => affiliateDialog.close())
+  );
+  document.querySelectorAll("[data-close-redeem-card-dialog]").forEach((button) =>
+    button.addEventListener("click", () => redeemCardDialog.close())
+  );
   bannerForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const values = new FormData(bannerForm);
@@ -491,6 +640,8 @@
       subtitle: values.get("subtitle"),
       icon_name: values.get("icon_name"),
       accent_color: values.get("accent_color"),
+      image_url: values.get("image_url"),
+      target_url: values.get("target_url"),
       sort_order: Number(values.get("sort_order")),
       is_active: bannerForm.elements.is_active.checked,
     };
@@ -500,8 +651,51 @@
         body: JSON.stringify(body),
       });
       bannerDialog.close();
-      notify("Dashboard card saved.");
+      notify("Poster saved.");
       renderBanners().catch(showError);
+    } catch (error) { notify(error.message, true); }
+  });
+  affiliateForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = new FormData(affiliateForm);
+    const id = affiliateForm.elements.id.value;
+    const body = {
+      title: values.get("title"),
+      message: values.get("message"),
+      image_url: values.get("image_url"),
+      destination_url: values.get("destination_url"),
+      sort_order: Number(values.get("sort_order")),
+      is_active: affiliateForm.elements.is_active.checked,
+    };
+    try {
+      await api(id ? `/affiliate-posts/${id}` : "/affiliate-posts", {
+        method: id ? "PUT" : "POST",
+        body: JSON.stringify(body),
+      });
+      affiliateDialog.close();
+      notify("Affiliate post saved.");
+      renderAffiliatePosts().catch(showError);
+    } catch (error) { notify(error.message, true); }
+  });
+  redeemCardForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = new FormData(redeemCardForm);
+    const id = redeemCardForm.elements.id.value;
+    const body = {
+      title: values.get("title"),
+      denomination_inr: Number(values.get("denomination_inr")),
+      minimum_coins: Number(values.get("minimum_coins")),
+      sort_order: Number(values.get("sort_order")),
+      is_active: redeemCardForm.elements.is_active.checked,
+    };
+    try {
+      await api(id ? `/redeem-cards/${id}` : "/redeem-cards", {
+        method: id ? "PUT" : "POST",
+        body: JSON.stringify(body),
+      });
+      redeemCardDialog.close();
+      notify("Gift card saved.");
+      renderRedeemCards().catch(showError);
     } catch (error) { notify(error.message, true); }
   });
   taskForm.addEventListener("submit", async (event) => {

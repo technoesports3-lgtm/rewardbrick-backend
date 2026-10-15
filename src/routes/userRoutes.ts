@@ -12,7 +12,7 @@ router.get('/profile/:userId', UserController.getUserProfile);
 router.get('/stats/:userId', UserController.getUserStats);
 router.get('/leaderboard', UserController.getLeaderboard);
 router.post('/daily-bonus', UserController.claimDailyBonus);
-router.post('/withdraw', UserController.requestWithdrawal);
+router.post('/withdraw', UserController.requestRedemption);
 router.get('/withdrawals/history/:userId', UserController.getWithdrawalHistory);
 router.get('/wallet/transaction-history/:userId', UserController.getTransactionHistory);
 router.get('/wallet/balance/:userId', UserController.getWalletBalance);

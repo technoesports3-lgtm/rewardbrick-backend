@@ -40,6 +40,9 @@ const validWebUrl = (value: unknown): value is string => {
     }
 };
 
+const validOptionalWebUrl = (value: unknown): value is string =>
+    value === '' || value == null || validWebUrl(value);
+
 const getLegacyTaskColumns = async (): Promise<{
     id: string;
     title: string | null;
@@ -82,6 +85,7 @@ const getUserColumns = async (): Promise<Set<string>> => {
 
 const quoteColumn = (column: string): string => `"${column.replace(/"/g, '""')}"`;
 const bannerIcons = new Set(['people', 'trophy', 'share', 'celebration', 'wallet', 'gift', 'star']);
+const appContentKeys = new Set(['terms', 'about', 'support_email', 'store_url']);
 
 export const AdminController = {
     getSession: (_req: Request, res: Response) =>
@@ -140,7 +144,7 @@ export const AdminController = {
         try {
             const result = await pool.query(
                 `SELECT id, title, subtitle, icon_name, accent_color, sort_order,
-                        is_active, updated_at
+                        image_url, target_url, is_active, updated_at
                  FROM dashboard_banners ORDER BY sort_order, id`
             );
             return res.status(200).json({ status: 'success', banners: result.rows });
@@ -153,7 +157,8 @@ export const AdminController = {
     getPublicBanners: async (_req: Request, res: Response) => {
         try {
             const result = await pool.query(
-                `SELECT id, title, subtitle, icon_name, accent_color, sort_order
+                `SELECT id, title, subtitle, icon_name, accent_color, image_url,
+                        target_url, sort_order
                  FROM dashboard_banners
                  WHERE is_active = TRUE
                  ORDER BY sort_order, id`
@@ -167,41 +172,64 @@ export const AdminController = {
 
     saveBanner: async (req: Request, res: Response) => {
         const bannerId = req.params.bannerId ? Number(req.params.bannerId) : null;
-        const { title, subtitle, icon_name, accent_color, sort_order, is_active } = req.body ?? {};
+        const { title, subtitle, icon_name, accent_color, image_url, target_url, sort_order, is_active } = req.body ?? {};
         const safeTitle = typeof title === 'string' ? title.trim() : '';
         const safeSubtitle = typeof subtitle === 'string' ? subtitle.trim() : '';
         const safeIcon = typeof icon_name === 'string' ? icon_name : '';
         const safeColor = typeof accent_color === 'string' ? accent_color.toUpperCase() : '';
+        const safeImageUrl = image_url == null ? '' : image_url;
+        const safeTargetUrl = target_url == null ? '' : target_url;
 
         if ((bannerId !== null && (!Number.isSafeInteger(bannerId) || bannerId < 1)) ||
             safeTitle.length < 2 || safeTitle.length > 60 ||
             safeSubtitle.length > 140 ||
             !bannerIcons.has(safeIcon) ||
             !/^#[0-9A-F]{6}$/.test(safeColor) ||
+            !validOptionalWebUrl(safeImageUrl) ||
+            !validOptionalWebUrl(safeTargetUrl) ||
             !Number.isSafeInteger(sort_order) || sort_order < 0 || sort_order > 10000 ||
             typeof is_active !== 'boolean') {
             return res.status(400).json({
                 status: 'error',
-                message: 'Check card title, subtitle, supported icon, color, order, and active status.',
+                message: 'Check card title, subtitle, HTTPS image/link URLs, supported icon, color, order, and active status.',
             });
         }
 
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
+            if (is_active) {
+                const existingActive = await client.query(
+                    `SELECT id FROM dashboard_banners
+                     WHERE is_active = TRUE AND ($1::INTEGER IS NULL OR id <> $1)
+                     LIMIT 1 FOR UPDATE`,
+                    [bannerId]
+                );
+                if (existingActive.rows.length > 0) {
+                    await client.query('ROLLBACK');
+                    return res.status(409).json({
+                        status: 'error',
+                        message: 'Only one dashboard ad poster can be active at a time.',
+                    });
+                }
+            }
             const saved = bannerId === null
                 ? await client.query(
                     `INSERT INTO dashboard_banners
-                        (title, subtitle, icon_name, accent_color, sort_order, is_active)
-                     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-                    [safeTitle, safeSubtitle, safeIcon, safeColor, sort_order, is_active]
+                        (title, subtitle, icon_name, accent_color, image_url, target_url,
+                         sort_order, is_active)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+                    [safeTitle, safeSubtitle, safeIcon, safeColor, safeImageUrl, safeTargetUrl,
+                        sort_order, is_active]
                 )
                 : await client.query(
                     `UPDATE dashboard_banners
                      SET title = $1, subtitle = $2, icon_name = $3, accent_color = $4,
-                         sort_order = $5, is_active = $6, updated_at = NOW()
-                     WHERE id = $7 RETURNING *`,
-                    [safeTitle, safeSubtitle, safeIcon, safeColor, sort_order, is_active, bannerId]
+                         image_url = $5, target_url = $6, sort_order = $7,
+                         is_active = $8, updated_at = NOW()
+                     WHERE id = $9 RETURNING *`,
+                    [safeTitle, safeSubtitle, safeIcon, safeColor, safeImageUrl, safeTargetUrl,
+                        sort_order, is_active, bannerId]
                 );
             if (saved.rowCount === 0) {
                 await client.query('ROLLBACK');
@@ -223,6 +251,328 @@ export const AdminController = {
             return res.status(500).json({ status: 'error', message: 'Could not save dashboard card.' });
         } finally {
             client.release();
+        }
+    },
+
+    listAffiliatePosts: async (_req: Request, res: Response) => {
+        try {
+            const result = await pool.query(
+                `SELECT id, title, message, image_url, destination_url, sort_order,
+                        is_active, created_at, updated_at
+                 FROM affiliate_posts ORDER BY sort_order, id`
+            );
+            return res.status(200).json({ status: 'success', posts: result.rows });
+        } catch (error) {
+            console.error('Admin affiliate post list failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not load affiliate posts.' });
+        }
+    },
+
+    saveAffiliatePost: async (req: Request, res: Response) => {
+        const postId = req.params.postId ? Number(req.params.postId) : null;
+        const { title, message, image_url, destination_url, sort_order, is_active } = req.body ?? {};
+        const safeTitle = typeof title === 'string' ? title.trim() : '';
+        const safeMessage = typeof message === 'string' ? message.trim() : '';
+        const safeImageUrl = image_url == null ? '' : image_url;
+        if ((postId !== null && (!Number.isSafeInteger(postId) || postId < 1)) ||
+            safeTitle.length < 2 || safeTitle.length > 120 ||
+            safeMessage.length > 2000 ||
+            !validOptionalWebUrl(safeImageUrl) ||
+            !validWebUrl(destination_url) ||
+            !Number.isSafeInteger(sort_order) || sort_order < 0 || sort_order > 10000 ||
+            typeof is_active !== 'boolean') {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Check the title, message, HTTPS image and destination URLs, order, and active status.',
+            });
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const saved = postId === null
+                ? await client.query(
+                    `INSERT INTO affiliate_posts
+                        (title, message, image_url, destination_url, sort_order, is_active)
+                     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+                    [safeTitle, safeMessage, safeImageUrl, destination_url, sort_order, is_active]
+                )
+                : await client.query(
+                    `UPDATE affiliate_posts
+                     SET title = $1, message = $2, image_url = $3, destination_url = $4,
+                         sort_order = $5, is_active = $6, updated_at = NOW()
+                     WHERE id = $7 RETURNING *`,
+                    [safeTitle, safeMessage, safeImageUrl, destination_url, sort_order, is_active, postId]
+                );
+            if (saved.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ status: 'error', message: 'Affiliate post not found.' });
+            }
+            await audit(client, postId === null ? 'affiliate_post_created' : 'affiliate_post_updated',
+                'affiliate_post', String(saved.rows[0].id), {
+                    title: safeTitle,
+                    sort_order,
+                    is_active,
+                });
+            await client.query('COMMIT');
+            return res.status(200).json({ status: 'success', post: saved.rows[0] });
+        } catch (error) {
+            await client.query('ROLLBACK').catch((rollbackError: Error) => {
+                console.error('Admin affiliate post save rollback failed:', rollbackError.message);
+            });
+            console.error('Admin affiliate post save failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not save affiliate post.' });
+        } finally {
+            client.release();
+        }
+    },
+
+    deleteAffiliatePost: async (req: Request, res: Response) => {
+        const postId = Number(req.params.postId);
+        if (!Number.isSafeInteger(postId) || postId < 1) {
+            return res.status(400).json({ status: 'error', message: 'A valid affiliate post ID is required.' });
+        }
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const removed = await client.query(
+                'DELETE FROM affiliate_posts WHERE id = $1 RETURNING id, title',
+                [postId]
+            );
+            if (removed.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ status: 'error', message: 'Affiliate post not found.' });
+            }
+            await audit(client, 'affiliate_post_deleted', 'affiliate_post', String(postId), {
+                title: removed.rows[0].title,
+            });
+            await client.query('COMMIT');
+            return res.status(200).json({ status: 'success' });
+        } catch (error) {
+            await client.query('ROLLBACK').catch((rollbackError: Error) => {
+                console.error('Admin affiliate post delete rollback failed:', rollbackError.message);
+            });
+            console.error('Admin affiliate post delete failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not delete affiliate post.' });
+        } finally {
+            client.release();
+        }
+    },
+
+    getPublicAffiliatePosts: async (_req: Request, res: Response) => {
+        try {
+            const result = await pool.query(
+                `SELECT id, title, message, image_url, destination_url
+                 FROM affiliate_posts
+                 WHERE is_active = TRUE
+                 ORDER BY sort_order, id`
+            );
+            return res.status(200).json({ status: 'success', posts: result.rows });
+        } catch (error) {
+            console.error('Public affiliate post list failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not load affiliate posts.' });
+        }
+    },
+
+    listRedeemCards: async (_req: Request, res: Response) => {
+        try {
+            const result = await pool.query(
+                `SELECT id, title, denomination_inr, coins_required, minimum_coins,
+                        sort_order, is_active, updated_at
+                 FROM redeem_cards ORDER BY sort_order, title, denomination_inr`
+            );
+            return res.status(200).json({ status: 'success', cards: result.rows });
+        } catch (error) {
+            console.error('Admin redemption card list failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not load redemption cards.' });
+        }
+    },
+
+    saveRedeemCard: async (req: Request, res: Response) => {
+        const cardId = req.params.cardId ? Number(req.params.cardId) : null;
+        const { title, denomination_inr, minimum_coins, sort_order, is_active } = req.body ?? {};
+        const safeTitle = typeof title === 'string' ? title.trim() : '';
+        const coinsRequired = Number(denomination_inr) * 10;
+        const safeMinimum = minimum_coins;
+        const gameVoucher = /free\s*fire|pubg/i.test(safeTitle);
+        if ((cardId !== null && (!Number.isSafeInteger(cardId) || cardId < 1)) ||
+            safeTitle.length < 2 || safeTitle.length > 80 ||
+            !Number.isSafeInteger(denomination_inr) || denomination_inr < (gameVoucher ? 25 : 100) || denomination_inr > 10000 ||
+            !Number.isSafeInteger(coinsRequired) ||
+            !Number.isSafeInteger(safeMinimum) || safeMinimum < 250 || safeMinimum > 100000 ||
+            !Number.isSafeInteger(sort_order) || sort_order < 0 || sort_order > 10000 ||
+            typeof is_active !== 'boolean') {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Check the card name, denomination (₹25–₹10,000), minimum coins, order, and active status.',
+            });
+        }
+        const minimumAllowed = gameVoucher ? 250 : 1000;
+        if (safeMinimum < Math.max(coinsRequired, minimumAllowed)) {
+            return res.status(400).json({
+                status: 'error',
+                message: gameVoucher
+                    ? 'Free Fire and PUBG vouchers require at least 250 coins and cannot be priced below their denomination.'
+                    : 'Standard vouchers require at least 1,000 coins and cannot be priced below their denomination.',
+            });
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const saved = cardId === null
+                ? await client.query(
+                    `INSERT INTO redeem_cards
+                        (title, denomination_inr, coins_required, minimum_coins, sort_order, is_active)
+                     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+                    [safeTitle, denomination_inr, coinsRequired, safeMinimum, sort_order, is_active]
+                )
+                : await client.query(
+                    `UPDATE redeem_cards
+                     SET title = $1, denomination_inr = $2, coins_required = $3,
+                         minimum_coins = $4, sort_order = $5, is_active = $6, updated_at = NOW()
+                     WHERE id = $7 RETURNING *`,
+                    [safeTitle, denomination_inr, coinsRequired, safeMinimum, sort_order, is_active, cardId]
+                );
+            if (saved.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ status: 'error', message: 'Redemption card not found.' });
+            }
+            await audit(client, cardId === null ? 'redeem_card_created' : 'redeem_card_updated',
+                'redeem_card', String(saved.rows[0].id), {
+                    title: safeTitle,
+                    denomination_inr,
+                    coins_required: coinsRequired,
+                    minimum_coins: safeMinimum,
+                    is_active,
+                });
+            await client.query('COMMIT');
+            return res.status(200).json({ status: 'success', card: saved.rows[0] });
+        } catch (error) {
+            await client.query('ROLLBACK').catch((rollbackError: Error) => {
+                console.error('Admin redemption card save rollback failed:', rollbackError.message);
+            });
+            console.error('Admin redemption card save failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not save redemption card. Check for a duplicate denomination.' });
+        } finally {
+            client.release();
+        }
+    },
+
+    deleteRedeemCard: async (req: Request, res: Response) => {
+        const cardId = Number(req.params.cardId);
+        if (!Number.isSafeInteger(cardId) || cardId < 1) {
+            return res.status(400).json({ status: 'error', message: 'A valid redemption card ID is required.' });
+        }
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const removed = await client.query(
+                `UPDATE redeem_cards SET is_active = FALSE, updated_at = NOW()
+                 WHERE id = $1 RETURNING id, title`,
+                [cardId]
+            );
+            if (removed.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ status: 'error', message: 'Redemption card not found.' });
+            }
+            await audit(client, 'redeem_card_disabled', 'redeem_card', String(cardId), {
+                title: removed.rows[0].title,
+            });
+            await client.query('COMMIT');
+            return res.status(200).json({ status: 'success' });
+        } catch (error) {
+            await client.query('ROLLBACK').catch((rollbackError: Error) => {
+                console.error('Admin redemption card disable rollback failed:', rollbackError.message);
+            });
+            console.error('Admin redemption card disable failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not disable redemption card.' });
+        } finally {
+            client.release();
+        }
+    },
+
+    getPublicRedeemCards: async (_req: Request, res: Response) => {
+        try {
+            const result = await pool.query(
+                `SELECT id, title, denomination_inr, coins_required, minimum_coins
+                 FROM redeem_cards WHERE is_active = TRUE
+                 ORDER BY sort_order, title, denomination_inr`
+            );
+            return res.status(200).json({ status: 'success', cards: result.rows });
+        } catch (error) {
+            console.error('Public redemption card list failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not load redemption cards.' });
+        }
+    },
+
+    listAppContent: async (_req: Request, res: Response) => {
+        try {
+            const result = await pool.query(
+                'SELECT content_key, content, updated_at FROM app_content ORDER BY content_key'
+            );
+            return res.status(200).json({ status: 'success', content: result.rows });
+        } catch (error) {
+            console.error('Admin app content list failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not load app information.' });
+        }
+    },
+
+    saveAppContent: async (req: Request, res: Response) => {
+        const contentKey = String(req.params.contentKey || '');
+        const content = typeof req.body?.content === 'string' ? req.body.content.trim() : null;
+        if (!appContentKeys.has(contentKey) || content === null || content.length > 20000) {
+            return res.status(400).json({ status: 'error', message: 'Choose a supported content section and provide text within 20,000 characters.' });
+        }
+        if (contentKey === 'support_email' && content !== '' &&
+            !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(content)) {
+            return res.status(400).json({ status: 'error', message: 'Enter a valid support email address or leave it blank.' });
+        }
+        if (contentKey === 'store_url' && content !== '' && !validWebUrl(content)) {
+            return res.status(400).json({ status: 'error', message: 'The app store link must use HTTPS or be left blank.' });
+        }
+
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            await client.query(
+                `INSERT INTO app_content (content_key, content)
+                 VALUES ($1, $2)
+                 ON CONFLICT (content_key) DO UPDATE
+                 SET content = EXCLUDED.content, updated_at = NOW()`,
+                [contentKey, content]
+            );
+            await audit(client, 'app_content_updated', 'app_content', contentKey, {
+                character_count: content.length,
+            });
+            await client.query('COMMIT');
+            return res.status(200).json({ status: 'success', content_key: contentKey });
+        } catch (error) {
+            await client.query('ROLLBACK').catch((rollbackError: Error) => {
+                console.error('Admin app content save rollback failed:', rollbackError.message);
+            });
+            console.error('Admin app content save failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not save app information.' });
+        } finally {
+            client.release();
+        }
+    },
+
+    getPublicAppContent: async (_req: Request, res: Response) => {
+        try {
+            const result = await pool.query(
+                `SELECT content_key, content
+                 FROM app_content
+                 WHERE content_key = ANY($1::TEXT[])`,
+                [['terms', 'about', 'support_email', 'store_url']]
+            );
+            const content = Object.fromEntries(
+                result.rows.map((row) => [String(row.content_key), String(row.content)])
+            );
+            return res.status(200).json({ status: 'success', content });
+        } catch (error) {
+            console.error('Public app content list failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not load app information.' });
         }
     },
 
@@ -431,9 +781,12 @@ export const AdminController = {
             const [result, count] = await Promise.all([
                 pool.query(
                     `SELECT w.id, w.user_id, u.full_name, u.email, w.amount_coins,
-                            w.method, w.upi_id, w.status, w.created_at, w.completed_at
+                            w.method, w.upi_id, w.redeem_card_id, rc.title AS card_title,
+                            rc.denomination_inr, w.voucher_reference, w.status,
+                            w.created_at, w.completed_at
                      FROM withdrawals w
                      LEFT JOIN users u ON u.user_id = w.user_id
+                     LEFT JOIN redeem_cards rc ON rc.id = w.redeem_card_id
                      WHERE ($1 = 'all' OR w.status = $1)
                      ORDER BY w.created_at DESC
                      LIMIT $2 OFFSET $3`,
@@ -459,9 +812,16 @@ export const AdminController = {
     updateWithdrawal: async (req: Request, res: Response) => {
         const withdrawalId = Number(req.params.withdrawalId);
         const nextStatus = req.body?.status;
+        const voucherReference = typeof req.body?.voucher_reference === 'string'
+            ? req.body.voucher_reference.trim()
+            : '';
         if (!Number.isSafeInteger(withdrawalId) || withdrawalId < 1 ||
-            !['completed', 'failed'].includes(nextStatus)) {
-            return res.status(400).json({ status: 'error', message: 'Valid withdrawal ID and status are required.' });
+            !['completed', 'failed'].includes(nextStatus) ||
+            (nextStatus === 'completed' && (voucherReference.length < 4 || voucherReference.length > 500))) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Valid withdrawal ID and status are required; provide the voucher code/reference before completing a redemption.',
+            });
         }
 
         const client = await pool.connect();
@@ -497,13 +857,16 @@ export const AdminController = {
             }
 
             const updated = await client.query(
-                `UPDATE withdrawals SET status = $1, completed_at = NOW()
-                 WHERE id = $2 RETURNING id, status, user_id, amount_coins`,
-                [nextStatus, withdrawalId]
+                `UPDATE withdrawals
+                 SET status = $1, voucher_reference = CASE WHEN $1 = 'completed' THEN $2 ELSE voucher_reference END,
+                     completed_at = NOW()
+                 WHERE id = $3 RETURNING id, status, user_id, amount_coins, voucher_reference`,
+                [nextStatus, voucherReference, withdrawalId]
             );
             await audit(client, `withdrawal_${nextStatus}`, 'withdrawal', String(withdrawalId), {
                 user_id: withdrawal.user_id,
                 amount_coins: toNumber(withdrawal.amount_coins),
+                voucher_reference_recorded: nextStatus === 'completed',
             });
             await client.query('COMMIT');
             return res.status(200).json({ status: 'success', withdrawal: updated.rows[0] });

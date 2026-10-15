@@ -29,8 +29,11 @@
         <button class="nav-link active" data-page="overview"><span>▦</span> Overview</button>
         <button class="nav-link" data-page="users"><span>♙</span> Users</button>
         <button class="nav-link" data-page="tasks"><span>◇</span> Tasks &amp; rewards</button>
-        <button class="nav-link" data-page="banners"><span>▣</span> Dashboard cards</button>
-        <button class="nav-link" data-page="withdrawals"><span>₹</span> Withdrawals</button>
+        <button class="nav-link" data-page="banners"><span>▣</span> Posters</button>
+        <button class="nav-link" data-page="affiliate"><span>↗</span> Affiliate posts</button>
+        <button class="nav-link" data-page="redeem-cards"><span>▤</span> Redeem cards</button>
+        <button class="nav-link" data-page="withdrawals"><span>🎁</span> Redemption requests</button>
+        <button class="nav-link" data-page="app-content"><span>ⓘ</span> App information</button>
         <button class="nav-link" data-page="providers"><span>⚙</span> Providers</button>
         <button class="nav-link" data-page="audit"><span>≡</span> Audit log</button>
       </nav>
@@ -73,10 +76,38 @@
         <option value="share">Share</option><option value="celebration">Celebration</option>
         <option value="wallet">Wallet</option><option value="gift">Gift</option><option value="star">Star</option>
       </select></label>
+      <label>Poster image URL (optional, HTTPS)<input name="image_url" type="url" placeholder="https://"></label>
+      <label>Tap destination URL (optional, HTTPS)<input name="target_url" type="url" placeholder="https://"></label>
       <label>Accent color<input name="accent_color" type="color" value="#00796b" required></label>
       <label>Display order<input name="sort_order" type="number" min="0" max="10000" step="1" value="0" required></label>
       <label class="check-label"><input name="is_active" type="checkbox" checked> Active and visible in the app</label>
       <div class="dialog-actions"><button class="button quiet" type="button" data-close-banner-dialog>Cancel</button><button class="button primary" type="submit">Save card</button></div>
+    </form>
+  </dialog>
+  <dialog id="affiliate-dialog">
+    <form id="affiliate-form" method="dialog" class="dialog-card">
+      <div class="dialog-heading"><div><p class="eyebrow">AFFILIATE CONTENT</p><h2 id="affiliate-dialog-title">Add post</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+      <input type="hidden" name="id">
+      <label>Post title<input name="title" maxlength="120" required></label>
+      <label>Message / caption<textarea name="message" maxlength="2000" rows="4"></textarea></label>
+      <label>Product image URL (optional, HTTPS)<input name="image_url" type="url" placeholder="https://"></label>
+      <label>Affiliate destination URL (HTTPS)<input name="destination_url" type="url" placeholder="https://" required></label>
+      <label>Display order<input name="sort_order" type="number" min="0" max="10000" step="1" value="0" required></label>
+      <label class="check-label"><input name="is_active" type="checkbox" checked> Active and visible in the app</label>
+      <div class="dialog-actions"><button class="button quiet" type="button" data-close-affiliate-dialog>Cancel</button><button class="button primary" type="submit">Save post</button></div>
+    </form>
+  </dialog>
+  <dialog id="redeem-card-dialog">
+    <form id="redeem-card-form" method="dialog" class="dialog-card">
+      <div class="dialog-heading"><div><p class="eyebrow">REDEMPTION CATALOG</p><h2 id="redeem-card-dialog-title">Add gift card</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></div>
+      <input type="hidden" name="id">
+      <label>Gift card provider<input name="title" maxlength="80" placeholder="Google Play, Amazon Pay, Free Fire..." required></label>
+      <label>Card denomination in rupees<input name="denomination_inr" type="number" min="25" max="10000" step="1" required></label>
+      <label>Minimum wallet coins required<input name="minimum_coins" type="number" min="250" max="100000" step="1" value="1000" required></label>
+      <p class="muted small">Conversion is fixed at 10 coins = ₹1. Free Fire/PUBG minimum is 250 coins; other vouchers require at least 1,000 coins.</p>
+      <label>Display order<input name="sort_order" type="number" min="0" max="10000" step="1" value="0" required></label>
+      <label class="check-label"><input name="is_active" type="checkbox" checked> Available for redemption</label>
+      <div class="dialog-actions"><button class="button quiet" type="button" data-close-redeem-card-dialog>Cancel</button><button class="button primary" type="submit">Save gift card</button></div>
     </form>
   </dialog>
 </body>

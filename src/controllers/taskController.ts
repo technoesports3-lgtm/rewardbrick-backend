@@ -3,7 +3,7 @@ import { PoolClient } from 'pg';
 import pool from '../config/db';
 import { TaskModel } from '../models/taskModel';
 
-const COINS_PER_RUPEE = 100;
+const COINS_PER_RUPEE = 10;
 const ADMANTUM_REWARD_RUPEES = 40;
 const ADMANTUM_REWARD_COINS = COINS_PER_RUPEE * ADMANTUM_REWARD_RUPEES;
 
@@ -35,9 +35,11 @@ const buildProviderLink = (providerName: string, userId?: string) => {
 export const TaskController = {
     getHomeContent: async (req: Request, res: Response) => {
         try {
-            const tasks = await TaskModel.getAllTasks();
-            const providerConfigs = await TaskModel.getProviderConfigs();
-            const managedTasks = await TaskModel.getManagedTasks();
+            const [tasks, providerConfigs, managedTasks] = await Promise.all([
+                TaskModel.getAllTasks(),
+                TaskModel.getProviderConfigs(),
+                TaskModel.getManagedTasks(),
+            ]);
             const providerMap = providerConfigs.reduce((acc: Record<string, any>, provider: any) => {
                 acc[provider.provider_name] = provider;
                 return acc;
@@ -52,10 +54,6 @@ export const TaskController = {
                     { name: 'Survey Earnings', icon: 'survey', type: 'survey', provider_name: 'cpx_research', link_url: surveyUrl.includes('{userId}') ? surveyUrl.replace(/\{userId\}/gi, userId === '{userId}' ? '{userId}' : userId) : surveyUrl },
                     { name: 'Prime Surveys', icon: 'prime', type: 'survey', provider_name: 'admantum', link_url: (providerMap.admantum?.base_url || defaultProviderUrls.admantum).includes('{userId}') ? (providerMap.admantum?.base_url || defaultProviderUrls.admantum).replace(/\{userId\}/gi, userId === '{userId}' ? '{userId}' : userId) : (providerMap.admantum?.base_url || defaultProviderUrls.admantum) },
                     { name: 'Games', icon: 'games', type: 'game', provider_name: 'gamezop', link_url: gameUrl }
-                ],
-                featured_banners: [
-                    { id: 1, title: 'PLAY & WIN', image_url: 'https://img.freepik.com/free-vector/play-win-banner-with-truck-background_1308-125633.jpg', action_type: 'game' },
-                    { id: 2, title: 'FUSION BLOCK', image_url: 'https://via.placeholder.com/350x150', action_type: 'offer' }
                 ],
                 provider_links: {
                     cpx_research: buildProviderLink('cpx_research', userId === '{userId}' ? undefined : userId),

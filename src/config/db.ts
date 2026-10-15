@@ -69,7 +69,7 @@ export const ensureProviderSchema = async () => {
         ALTER TABLE provider_configs
             ADD COLUMN IF NOT EXISTS reward_coins INTEGER;
         UPDATE provider_configs
-        SET reward_coins = 4000
+        SET reward_coins = 400
         WHERE provider_name = 'admantum' AND reward_coins IS NULL;
         CREATE TABLE IF NOT EXISTS admin_managed_tasks (
             id SERIAL PRIMARY KEY,
@@ -97,33 +97,82 @@ export const ensureProviderSchema = async () => {
             subtitle TEXT NOT NULL DEFAULT '',
             icon_name TEXT NOT NULL DEFAULT 'celebration',
             accent_color TEXT NOT NULL DEFAULT '#087D74',
+            image_url TEXT NOT NULL DEFAULT '',
+            target_url TEXT NOT NULL DEFAULT '',
             sort_order INTEGER NOT NULL DEFAULT 0,
             is_active BOOLEAN NOT NULL DEFAULT TRUE,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
-        CREATE TABLE IF NOT EXISTS dashboard_banner_seed (
-            id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
-            seeded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        ALTER TABLE dashboard_banners
+            ADD COLUMN IF NOT EXISTS image_url TEXT NOT NULL DEFAULT '',
+            ADD COLUMN IF NOT EXISTS target_url TEXT NOT NULL DEFAULT '';
+        CREATE TABLE IF NOT EXISTS affiliate_posts (
+            id SERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL DEFAULT '',
+            image_url TEXT NOT NULL DEFAULT '',
+            destination_url TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+        CREATE TABLE IF NOT EXISTS redeem_cards (
+            id SERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            denomination_inr INTEGER NOT NULL,
+            coins_required INTEGER NOT NULL,
+            minimum_coins INTEGER NOT NULL DEFAULT 1000,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (title, denomination_inr)
+        );
+        CREATE TABLE IF NOT EXISTS app_content (
+            content_key TEXT PRIMARY KEY,
+            content TEXT NOT NULL DEFAULT '',
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS dashboard_banner_cleanup_migration (
+            id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS provider_coin_conversion_migration (
+            id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        ALTER TABLE withdrawals
+            ADD COLUMN IF NOT EXISTS redeem_card_id INTEGER REFERENCES redeem_cards(id),
+            ADD COLUMN IF NOT EXISTS voucher_reference TEXT;
+        CREATE INDEX IF NOT EXISTS transactions_user_created_idx
+            ON transactions (user_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS withdrawals_user_created_idx
+            ON withdrawals (user_id, created_at DESC);
     `);
-
-    const bannerSeed = await pool.query(
-        `INSERT INTO dashboard_banner_seed DEFAULT VALUES
+    const providerCoinMigration = await pool.query(
+        `INSERT INTO provider_coin_conversion_migration DEFAULT VALUES
          ON CONFLICT DO NOTHING RETURNING id`
     );
-    if (bannerSeed.rowCount) {
+    if (providerCoinMigration.rowCount) {
+        await pool.query(
+            `UPDATE provider_configs SET reward_coins = 400
+             WHERE provider_name = 'admantum' AND reward_coins = 4000`
+        );
+    }
+    const cleanupDemoBanners = await pool.query(
+        `INSERT INTO dashboard_banner_cleanup_migration DEFAULT VALUES
+         ON CONFLICT DO NOTHING RETURNING id`
+    );
+    if (cleanupDemoBanners.rowCount) {
         await pool.query(`
-            INSERT INTO dashboard_banners
-                (title, subtitle, icon_name, accent_color, sort_order, is_active)
-            SELECT defaults.title, defaults.subtitle, defaults.icon_name,
-                   defaults.accent_color, defaults.sort_order, TRUE
-            FROM (VALUES
+            DELETE FROM dashboard_banners
+            WHERE (title, subtitle, icon_name, accent_color, sort_order) IN (
                 ('REFERRAL CONTEST', 'Invite friends and unlock bonus coins.', 'people', '#00796B', 0),
                 ('REFERRAL CONTEST', 'Your network could be your next reward.', 'trophy', '#AD1457', 1),
                 ('REFERRAL CONTEST', 'Share. Earn. Repeat.', 'share', '#EF6C00', 2)
-            ) AS defaults(title, subtitle, icon_name, accent_color, sort_order)
-            WHERE NOT EXISTS (SELECT 1 FROM dashboard_banners)
+            );
         `);
     }
 
