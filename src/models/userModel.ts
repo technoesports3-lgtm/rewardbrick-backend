@@ -1,21 +1,19 @@
 import pool from '../config/db';
 
 export const UserModel = {
-    // ఇమెయిల్ లేదా డివైజ్ ఐడి తో యూజర్ ని వెతకడం
-    findByEmailOrDevice: async (email: string, device_id: string) => {
-        const query = 'SELECT * FROM users WHERE email = $1 OR device_id = $2';
-        const result = await pool.query(query, [email, device_id]);
+    findByEmail: async (email: string) => {
+        const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
         return result.rows[0];
     },
 
     // కొత్త యూజర్ ని క్రియేట్ చేయడం (Password Hash తో సహా)
-    createUser: async (email: string, full_name: string, device_id: string, referral_code: string, passwordHash: string) => {
+    createUser: async (email: string, full_name: string, referral_code: string, passwordHash: string) => {
         const query = `
-            INSERT INTO users (email, full_name, device_id, referral_code, password)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO users (email, full_name, referral_code, password)
+            VALUES ($1, $2, $3, $4)
             RETURNING user_id, email, full_name, wallet_balance, referral_code;
         `;
-        const result = await pool.query(query, [email, full_name, device_id, referral_code, passwordHash]);
+        const result = await pool.query(query, [email, full_name, referral_code, passwordHash]);
         return result.rows[0];
     },
 

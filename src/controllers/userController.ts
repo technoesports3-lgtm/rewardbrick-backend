@@ -34,25 +34,25 @@ const rankedEarningsQuery = `
 export const UserController = {
     registerUser: async (req: Request, res: Response) => {
         try {
-            const { email, full_name, device_id, password } = req.body;
+            const { email, full_name, password } = req.body;
 
-            if (!email || !full_name || !password || !device_id) {
+            if (!email || !full_name || !password) {
                 return res.status(400).json({ status: 'error', message: 'All fields are required!' });
             }
             if (password.length < 6) {
                 return res.status(400).json({ status: 'error', message: 'Password must be 6+ characters!' });
             }
 
-            const existingUser = await UserModel.findByEmailOrDevice(email, device_id);
+            const existingUser = await UserModel.findByEmail(email);
             if (existingUser) {
-                return res.status(400).json({ status: 'error', message: 'User already exists with this Email or Device!' });
+                return res.status(400).json({ status: 'error', message: 'An account already exists with this email.' });
             }
 
             const salt = await bcrypt.genSalt(10);
             const hashedPassword = await bcrypt.hash(password, salt);
             const referralCode = 'RB' + Math.floor(100000 + Math.random() * 900000);
 
-            const newUser = await UserModel.createUser(email, full_name, device_id, referralCode, hashedPassword);
+            const newUser = await UserModel.createUser(email, full_name, referralCode, hashedPassword);
             return res.status(201).json({ status: 'success', user: newUser });
         } catch (error: any) {
             return res.status(500).json({ status: 'error', message: error.message });
@@ -67,7 +67,7 @@ export const UserController = {
                 return res.status(400).json({ status: 'error', message: 'Email and Password are required!' });
             }
 
-            const user = await UserModel.findByEmailOrDevice(email, '');
+            const user = await UserModel.findByEmail(email);
             if (!user) {
                 return res.status(404).json({ status: 'error', message: 'User not found!' });
             }
@@ -288,20 +288,15 @@ export const UserController = {
 
     googleRegister: async (req: Request, res: Response) => {
         try {
-            const { name, email, device_id } = req.body;
-
-            const userByDevice = await pool.query('SELECT * FROM users WHERE device_id = $1', [device_id]);
-            if (userByDevice.rows.length > 0 && userByDevice.rows[0].email !== email) {
-                return res.status(403).json({ status: 'error', message: 'Only one account per device is allowed!' });
-            }
+            const { name, email } = req.body;
 
             let user = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
 
             if (user.rows.length === 0) {
                 const refCode = 'RB' + Math.floor(Math.random() * 900000);
                 const newUser = await pool.query(
-                    'INSERT INTO users (full_name, email, device_id, referral_code) VALUES ($1, $2, $3, $4) RETURNING *',
-                    [name, email, device_id, refCode]
+                    'INSERT INTO users (full_name, email, referral_code) VALUES ($1, $2, $3) RETURNING *',
+                    [name, email, refCode]
                 );
                 user = newUser;
             }

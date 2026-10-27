@@ -11,6 +11,16 @@ const pool = new Pool({
 });
 
 export const ensureProviderSchema = async () => {
+    const deviceIdColumn = await pool.query(
+        `SELECT is_nullable FROM information_schema.columns
+         WHERE table_schema = current_schema()
+           AND table_name = 'users'
+           AND column_name = 'device_id'`
+    );
+    if (deviceIdColumn.rows[0]?.is_nullable === 'NO') {
+        await pool.query('ALTER TABLE users ALTER COLUMN device_id DROP NOT NULL');
+    }
+
     await pool.query(`
         ALTER TABLE tasks
             ADD COLUMN IF NOT EXISTS task_type TEXT NOT NULL DEFAULT 'direct',
