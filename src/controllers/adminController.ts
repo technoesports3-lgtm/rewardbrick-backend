@@ -100,14 +100,23 @@ export const AdminController = {
             app_id: process.env.ONESIGNAL_APP_ID ?? '',
         }),
 
-    getCloudinarySignature: (_req: Request, res: Response) => {
+    uploadCloudinaryImage: async (req: Request, res: Response) => {
         const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
         const apiKey = process.env.CLOUDINARY_API_KEY;
         const apiSecret = process.env.CLOUDINARY_API_SECRET;
+        const imageTypes = new Set(['image/png', 'image/jpeg', 'image/webp']);
+        const contentType = req.header('content-type')?.split(';')[0].trim().toLowerCase();
         if (!cloudName || !apiKey || !apiSecret) {
             return res.status(503).json({
                 status: 'error',
                 message: 'Cloudinary image uploads are not configured on the backend.',
+            });
+        }
+        if (!Buffer.isBuffer(req.body) || req.body.length === 0 ||
+            req.body.length > 10 * 1024 * 1024 || !contentType || !imageTypes.has(contentType)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Upload a PNG, JPEG or WebP image smaller than 10 MB.',
             });
         }
 
@@ -116,14 +125,47 @@ export const AdminController = {
         const signature = createHash('sha1')
             .update(`folder=${folder}&timestamp=${timestamp}${apiSecret}`)
             .digest('hex');
-        return res.status(200).json({
-            status: 'success',
-            cloud_name: cloudName,
+        const body = new URLSearchParams({
+            file: `data:${contentType};base64,${req.body.toString('base64')}`,
             api_key: apiKey,
-            timestamp,
+            timestamp: String(timestamp),
             folder,
             signature,
         });
+
+        try {
+            const response = await axios.post(
+                `https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/image/upload`,
+                body,
+                {
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    timeout: 30000,
+                    maxBodyLength: 15 * 1024 * 1024,
+                }
+            );
+            const secureUrl = response.data?.secure_url;
+            if (typeof secureUrl !== 'string') {
+                return res.status(502).json({
+                    status: 'error',
+                    message: 'Cloudinary did not return an image URL. Check the Cloudinary account configuration.',
+                });
+            }
+            return res.status(201).json({ status: 'success', secure_url: secureUrl });
+        } catch (error) {
+            const providerMessage = axios.isAxiosError(error)
+                ? (error.response?.data as { error?: { message?: unknown } } | undefined)?.error?.message
+                : undefined;
+            const detail = typeof providerMessage === 'string' ? providerMessage.slice(0, 240) : '';
+            console.error('Cloudinary image upload failed:', detail || (
+                axios.isAxiosError(error) ? error.message : error
+            ));
+            return res.status(502).json({
+                status: 'error',
+                message: detail
+                    ? `Cloudinary rejected the upload: ${detail}`
+                    : 'Cloudinary could not be reached. Check the backend connection and Cloudinary configuration.',
+            });
+        }
     },
 
     listNotifications: async (_req: Request, res: Response) => {
@@ -135,6 +177,7 @@ export const AdminController = {
             return res.status(200).json({
                 status: 'success',
                 configured: Boolean(process.env.ONESIGNAL_APP_ID && process.env.ONESIGNAL_REST_API_KEY),
+                app_id: process.env.ONESIGNAL_APP_ID ?? '',
                 notifications: result.rows,
             });
         } catch (error) {
@@ -185,13 +228,22 @@ export const AdminController = {
                 }
             );
         } catch (error) {
+            const providerResponse = axios.isAxiosError(error) ? error.response : undefined;
+            const providerErrors = providerResponse?.data as { errors?: unknown } | undefined;
+            const providerDetail = typeof providerErrors?.errors === 'string'
+                ? providerErrors.errors
+                : Array.isArray(providerErrors?.errors)
+                    ? providerErrors.errors.filter((item): item is string => typeof item === 'string').join('; ')
+                    : '';
             console.error(
                 'OneSignal notification send failed:',
-                axios.isAxiosError(error) ? error.response?.data ?? error.message : error
+                providerResponse?.data ?? (axios.isAxiosError(error) ? error.message : error)
             );
             return res.status(502).json({
                 status: 'error',
-                message: 'OneSignal could not send the notification. Check the backend configuration and try again.',
+                message: providerDetail
+                    ? `OneSignal rejected the notification: ${providerDetail.slice(0, 300)}`
+                    : 'OneSignal could not send the notification. Check that the backend App ID and REST API key belong to the same OneSignal app.',
             });
         }
 

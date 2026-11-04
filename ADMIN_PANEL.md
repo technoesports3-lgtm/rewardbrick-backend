@@ -7,7 +7,7 @@ The admin panel is served by the backend at `/admin` and does not require a sepa
 1. Set `ADMIN_PANEL_PASSWORD` in the backend's local environment and deployment provider. Use a unique password with at least 20 random characters; do not commit it or put it in Flutter.
 2. Keep `DATABASE_URL` configured for the PostgreSQL database.
 3. Set the provider postback secrets (`ADMANTUM_POSTBACK_SECRET`, `CPX_RESEARCH_POSTBACK_SECRET`) to the exact secrets configured with those providers. The admin panel can also update these without displaying saved secret values.
-4. For admin image uploads, set `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET`. Keep the API secret on the backend only.
+4. For admin image uploads, set `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET`. Keep the API secret on the backend only. Admin uploads are relayed through the authenticated backend so the browser does not need to contact Cloudinary directly.
 5. For push notifications, create a OneSignal app and set `ONESIGNAL_APP_ID` and `ONESIGNAL_REST_API_KEY` on the backend. The app reads the public App ID from the backend (or can receive it with `--dart-define=ONESIGNAL_APP_ID=<your-app-id>`); configure Android push credentials in OneSignal.
 6. Deploy/restart the backend so the database adds the admin tables, app posters, affiliate posts, redemption catalog, notification history, and required columns.
 7. Open `https://<your-backend-host>/admin` over HTTPS and sign in with `ADMIN_PANEL_PASSWORD`.

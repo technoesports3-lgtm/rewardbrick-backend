@@ -450,6 +450,7 @@
       <div class="page-heading"><div><h2>Push notifications</h2><p>Send a message to users subscribed to RewardBrick through OneSignal.</p></div></div>
       <section class="panel">
         ${data.configured ? "" : `<p class="notice error">OneSignal is not configured. Add ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY to the backend environment.</p>`}
+        ${data.configured ? `<p class="muted small">Sending through OneSignal app <code>${escapeHtml(data.app_id)}</code>. This App ID must match the app configured in your OneSignal dashboard.</p>` : ""}
         <form id="notification-form" class="provider-card">
           <label>Notification title<input name="title" maxlength="80" required></label>
           <label>Message<textarea name="message" rows="4" maxlength="500" required></textarea></label>
@@ -466,15 +467,27 @@
     document.querySelector("#notification-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       const form = event.currentTarget;
+      const submit = form.querySelector('button[type="submit"]');
       const body = Object.fromEntries(new FormData(form));
+      submit.disabled = true;
       try {
         const result = await api("/notifications", {
           method: "POST",
           body: JSON.stringify(body),
         });
-        notify(`${result.message} Recipients: ${number(result.recipients)}.`);
+        const recipients = Number(result.recipients) || 0;
+        notify(
+          recipients > 0
+            ? `${result.message} Recipients: ${number(recipients)}.`
+            : "OneSignal accepted the message but matched 0 subscribed devices. Check the App ID above and device subscription in OneSignal.",
+          recipients === 0
+        );
         renderNotifications().catch(showError);
-      } catch (error) { notify(error.message, true); }
+      } catch (error) {
+        notify(error.message, true);
+      } finally {
+        submit.disabled = false;
+      }
     });
   }
 
@@ -696,20 +709,23 @@
     const submitButton = input.form.querySelector('button[type="submit"]');
     if (submitButton) submitButton.disabled = true;
     try {
-      const signed = await api("/cloudinary/signature");
-      const body = new FormData();
-      body.append("file", file);
-      body.append("api_key", signed.api_key);
-      body.append("timestamp", String(signed.timestamp));
-      body.append("folder", signed.folder);
-      body.append("signature", signed.signature);
-      const response = await fetch(
-        `https://api.cloudinary.com/v1_1/${encodeURIComponent(signed.cloud_name)}/image/upload`,
-        { method: "POST", body }
-      );
+      let response;
+      try {
+        response = await fetch("/admin/api/cloudinary/upload", {
+          method: "POST",
+          headers: {
+            "Content-Type": file.type,
+            "X-Admin-Request": "true",
+          },
+          credentials: "same-origin",
+          body: file,
+        });
+      } catch {
+        throw new Error("Could not reach the RewardBrick backend. Check your connection and try again.");
+      }
       const result = await response.json().catch(() => ({}));
       if (!response.ok || typeof result.secure_url !== "string") {
-        throw new Error(result.error?.message || "Cloudinary image upload failed.");
+        throw new Error(result.message || `Image upload failed (${response.status}).`);
       }
       const urlField = input.form.elements[input.dataset.cloudinaryTarget];
       if (!urlField) throw new Error("The image URL field was not found.");

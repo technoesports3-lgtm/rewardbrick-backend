@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { raw, Router } from 'express';
 import path from 'path';
 import { AdminController } from '../controllers/adminController';
 import { adminLogin, adminLogout, requireAdminSession } from '../middlewares/adminAuth';
@@ -19,7 +19,11 @@ router.post('/api/logout', requireAdminSession, adminLogout);
 router.get('/api/session', requireAdminSession, AdminController.getSession);
 router.use('/api', requireAdminSession);
 
-router.get('/api/cloudinary/signature', AdminController.getCloudinarySignature);
+router.post(
+    '/api/cloudinary/upload',
+    raw({ type: ['image/png', 'image/jpeg', 'image/webp'], limit: '10mb' }),
+    AdminController.uploadCloudinaryImage
+);
 router.get('/api/notifications', AdminController.listNotifications);
 router.post('/api/notifications', AdminController.sendNotification);
 router.get('/api/dashboard', AdminController.getDashboard);
