@@ -94,6 +94,12 @@ export const AdminController = {
     getSession: (_req: Request, res: Response) =>
         res.status(200).json({ status: 'success', authenticated: true }),
 
+    getPublicNotificationConfig: (_req: Request, res: Response) =>
+        res.status(200).json({
+            status: 'success',
+            app_id: process.env.ONESIGNAL_APP_ID ?? '',
+        }),
+
     getCloudinarySignature: (_req: Request, res: Response) => {
         const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
         const apiKey = process.env.CLOUDINARY_API_KEY;
@@ -770,6 +776,11 @@ export const AdminController = {
                     ? `${quoteColumn(active)} = TRUE`
                     : `${quoteColumn(active)} = FALSE`;
             const orderColumn = createdAt ?? userId;
+            const limitParameter = query ? '$2' : '$1';
+            const offsetParameter = query ? '$3' : '$2';
+            const usersQueryValues = query
+                ? [query, page.limit, page.offset]
+                : [page.limit, page.offset];
 
             const [result, count] = await Promise.all([
                 pool.query(
@@ -782,13 +793,13 @@ export const AdminController = {
                      FROM users
                      WHERE ${searchClause} AND ${statusClause}
                      ORDER BY ${quoteColumn(orderColumn)} DESC
-                     LIMIT $2 OFFSET $3`,
-                    [query, page.limit, page.offset]
+                     LIMIT ${limitParameter} OFFSET ${offsetParameter}`,
+                    usersQueryValues
                 ),
                 pool.query(
                     `SELECT COUNT(*) AS total FROM users
                      WHERE ${searchClause} AND ${statusClause}`,
-                    [query]
+                    query ? [query] : []
                 ),
             ]);
             return res.status(200).json({

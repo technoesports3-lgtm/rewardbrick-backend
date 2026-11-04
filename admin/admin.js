@@ -668,17 +668,31 @@
   document.querySelectorAll("[data-close-redeem-card-dialog]").forEach((button) =>
     button.addEventListener("click", () => redeemCardDialog.close())
   );
+  document.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) return;
+    const input = event.target.closest("[data-cloudinary-upload]");
+    if (input && !input.disabled) input.value = "";
+  });
   document.addEventListener("change", async (event) => {
     const input = event.target.closest("[data-cloudinary-upload]");
     const file = input?.files?.[0];
     if (!input || !file) return;
+    const status = input.parentElement.querySelector(".upload-status");
     if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 10 * 1024 * 1024) {
-      input.value = "";
+      if (status) {
+        status.textContent = "Choose a PNG, JPEG or WebP image smaller than 10 MB.";
+        status.classList.add("error-text");
+      }
       notify("Choose a PNG, JPEG or WebP image smaller than 10 MB.", true);
       return;
     }
 
     input.disabled = true;
+    if (status) {
+      status.textContent = `Uploading ${file.name}…`;
+      status.classList.remove("error-text");
+      status.classList.add("uploading");
+    }
     const submitButton = input.form.querySelector('button[type="submit"]');
     if (submitButton) submitButton.disabled = true;
     try {
@@ -700,13 +714,23 @@
       const urlField = input.form.elements[input.dataset.cloudinaryTarget];
       if (!urlField) throw new Error("The image URL field was not found.");
       urlField.value = result.secure_url;
+      urlField.dispatchEvent(new Event("input", { bubbles: true }));
+      if (status) {
+        status.textContent = `${file.name} uploaded successfully. Save the form to publish it.`;
+        status.classList.remove("uploading", "error-text");
+        status.classList.add("success-text");
+      }
       notify("Image uploaded. Save the form to publish it.");
     } catch (error) {
+      if (status) {
+        status.textContent = error.message || "Image upload failed. Try again.";
+        status.classList.remove("uploading", "success-text");
+        status.classList.add("error-text");
+      }
       notify(error.message, true);
     } finally {
       input.disabled = false;
       if (submitButton) submitButton.disabled = false;
-      input.value = "";
     }
   });
   bannerForm.addEventListener("submit", async (event) => {

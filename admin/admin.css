@@ -81,6 +81,13 @@ td strong { font-size: 12px; }
 .provider-card { padding: 18px; border: 1px solid var(--line); border-radius: 13px; background: #fff; }
 .provider-card h3 { margin: 0 0 15px; text-transform: capitalize; font: 700 15px "Segoe UI", sans-serif; }
 .provider-card form { display: grid; gap: 12px; }
+.image-upload-field { padding: 12px; border: 1px dashed #b9cdd2; border-radius: 11px; background: #f8fbfc; }
+.image-upload-field input[type="file"] { min-height: 44px; padding: 6px; background: #fff; font-size: 12px; }
+.image-upload-field input[type="file"]::file-selector-button { margin-right: 10px; padding: 8px 11px; border: 0; border-radius: 7px; background: var(--teal-soft); color: var(--teal-dark); font-weight: 700; cursor: pointer; }
+.upload-status { color: var(--muted); font-size: 11px; font-weight: 500; line-height: 1.45; }
+.upload-status.uploading { color: #805612; }
+.upload-status.success-text { color: var(--teal-dark); }
+.upload-status.error-text { color: var(--red); }
 .login-shell { min-height: 100vh; display: grid; place-items: center; padding: 22px; background: radial-gradient(circle at top right, #dbf1ed, transparent 37%), var(--paper); }
 .login-card { width: min(420px, 100%); padding: 35px; background: white; border: 1px solid var(--line); border-radius: 19px; box-shadow: 0 20px 70px #13364512; }
 .login-card .brand-mark { margin-bottom: 22px; }
@@ -89,6 +96,7 @@ td strong { font-size: 12px; }
 .login-card label { margin-top: 16px; }
 .error-text { min-height: 18px; margin: 12px 0 0; color: var(--red); font-size: 12px; }
 dialog { width: min(560px, calc(100% - 28px)); padding: 0; border: 0; border-radius: 16px; box-shadow: 0 24px 90px #122c3c33; }
+dialog[open] { max-height: min(88vh, 820px); overflow-y: auto; }
 dialog::backdrop { background: #102b3880; backdrop-filter: blur(3px); }
 .dialog-card { display: grid; gap: 14px; padding: 24px; }
 .dialog-heading, .dialog-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }

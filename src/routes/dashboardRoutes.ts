@@ -3,6 +3,7 @@ import { AdminController } from '../controllers/adminController';
 
 const router = Router();
 
+router.get('/notification-config', AdminController.getPublicNotificationConfig);
 router.get('/banners', AdminController.getPublicBanners);
 router.get('/affiliate-posts', AdminController.getPublicAffiliatePosts);
 router.get('/redeem-cards', AdminController.getPublicRedeemCards);
