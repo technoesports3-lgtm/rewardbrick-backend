@@ -1,5 +1,8 @@
 import { Request, Response } from 'express';
 import { PoolClient } from 'pg';
+import axios from 'axios';
+import type { AxiosResponse } from 'axios';
+import { createHash } from 'crypto';
 import pool from '../config/db';
 
 const toNumber = (value: unknown): number => {
@@ -90,6 +93,125 @@ const appContentKeys = new Set(['terms', 'about', 'support_email', 'store_url'])
 export const AdminController = {
     getSession: (_req: Request, res: Response) =>
         res.status(200).json({ status: 'success', authenticated: true }),
+
+    getCloudinarySignature: (_req: Request, res: Response) => {
+        const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+        const apiKey = process.env.CLOUDINARY_API_KEY;
+        const apiSecret = process.env.CLOUDINARY_API_SECRET;
+        if (!cloudName || !apiKey || !apiSecret) {
+            return res.status(503).json({
+                status: 'error',
+                message: 'Cloudinary image uploads are not configured on the backend.',
+            });
+        }
+
+        const timestamp = Math.floor(Date.now() / 1000);
+        const folder = 'rewardbrick';
+        const signature = createHash('sha1')
+            .update(`folder=${folder}&timestamp=${timestamp}${apiSecret}`)
+            .digest('hex');
+        return res.status(200).json({
+            status: 'success',
+            cloud_name: cloudName,
+            api_key: apiKey,
+            timestamp,
+            folder,
+            signature,
+        });
+    },
+
+    listNotifications: async (_req: Request, res: Response) => {
+        try {
+            const result = await pool.query(
+                `SELECT id, title, message, target_url, recipients, created_at
+                 FROM admin_notifications ORDER BY created_at DESC LIMIT 50`
+            );
+            return res.status(200).json({
+                status: 'success',
+                configured: Boolean(process.env.ONESIGNAL_APP_ID && process.env.ONESIGNAL_REST_API_KEY),
+                notifications: result.rows,
+            });
+        } catch (error) {
+            console.error('Admin notification history failed:', error);
+            return res.status(500).json({ status: 'error', message: 'Could not load notification history.' });
+        }
+    },
+
+    sendNotification: async (req: Request, res: Response) => {
+        const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+        const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+        const targetUrl = req.body?.target_url == null ? '' : req.body.target_url;
+        if (title.length < 2 || title.length > 80 ||
+            message.length < 2 || message.length > 500 ||
+            !validOptionalWebUrl(targetUrl)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Enter a title (2–80 characters), message (2–500 characters), and optional HTTPS link.',
+            });
+        }
+
+        const appId = process.env.ONESIGNAL_APP_ID;
+        const apiKey = process.env.ONESIGNAL_REST_API_KEY;
+        if (!appId || !apiKey) {
+            return res.status(503).json({
+                status: 'error',
+                message: 'OneSignal notifications are not configured on the backend.',
+            });
+        }
+
+        let response: AxiosResponse<Record<string, unknown>>;
+        try {
+            response = await axios.post(
+                'https://api.onesignal.com/notifications',
+                {
+                    app_id: appId,
+                    included_segments: ['Subscribed Users'],
+                    headings: { en: title },
+                    contents: { en: message },
+                    ...(targetUrl ? { url: targetUrl } : {}),
+                },
+                {
+                    headers: {
+                        Authorization: `Key ${apiKey}`,
+                        'Content-Type': 'application/json',
+                    },
+                    timeout: 15000,
+                }
+            );
+        } catch (error) {
+            console.error(
+                'OneSignal notification send failed:',
+                axios.isAxiosError(error) ? error.response?.data ?? error.message : error
+            );
+            return res.status(502).json({
+                status: 'error',
+                message: 'OneSignal could not send the notification. Check the backend configuration and try again.',
+            });
+        }
+
+        const recipients = Number(response.data?.recipients ?? 0);
+        const notificationId =
+            typeof response.data?.id === 'string' ? response.data.id : null;
+        try {
+            await pool.query(
+                `INSERT INTO admin_notifications
+                    (title, message, target_url, provider_notification_id, recipients)
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [title, message, targetUrl, notificationId, recipients]
+            );
+            return res.status(201).json({
+                status: 'success',
+                message: 'Notification sent.',
+                recipients,
+            });
+        } catch (error) {
+            console.error('Notification history save failed after OneSignal accepted the message:', error);
+            return res.status(500).json({
+                status: 'error',
+                message: 'OneSignal accepted the notification, but its history could not be saved. Do not retry the send.',
+            });
+        }
+    },
 
     getDashboard: async (_req: Request, res: Response) => {
         try {
@@ -884,7 +1006,7 @@ export const AdminController = {
     listTasks: async (_req: Request, res: Response) => {
         try {
             const result = await pool.query(
-                `SELECT id, title, description, provider_name, offer_url, image_url,
+                `SELECT id, title, description, provider_name, offer_url, image_url, open_in,
                         reward_coins, is_active, created_at, updated_at
                  FROM admin_managed_tasks
                  ORDER BY created_at DESC`
@@ -1003,6 +1125,7 @@ export const AdminController = {
     saveTask: async (req: Request, res: Response) => {
         const id = req.params.taskId ? Number(req.params.taskId) : null;
         const { title, description, provider_name, offer_url, image_url, reward_coins, is_active } = req.body ?? {};
+        const openIn = typeof req.body?.open_in === 'string' ? req.body.open_in : 'auto';
         const safeTitle = typeof title === 'string' ? title.trim() : '';
         const safeDescription = typeof description === 'string' ? description.trim() : '';
         const safeProvider = typeof provider_name === 'string' ? provider_name.trim() : '';
@@ -1015,6 +1138,7 @@ export const AdminController = {
             safeProvider.length < 2 || safeProvider.length > 40 ||
             !validWebUrl(offer_url) ||
             (safeImageUrl !== '' && !validWebUrl(safeImageUrl)) ||
+            !['auto', 'play_store', 'browser'].includes(openIn) ||
             !Number.isSafeInteger(reward_coins) || reward_coins < 0 || reward_coins > 1_000_000 ||
             typeof safeActive !== 'boolean') {
             return res.status(400).json({ status: 'error', message: 'Check task title, HTTPS URLs, provider, reward, and active status.' });
@@ -1035,17 +1159,17 @@ export const AdminController = {
             const saved = id === null
                 ? await client.query(
                     `INSERT INTO admin_managed_tasks
-                        (title, description, provider_name, offer_url, image_url, reward_coins, is_active)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-                    [safeTitle, safeDescription, safeProvider, offer_url, safeImageUrl, reward_coins, safeActive]
+                        (title, description, provider_name, offer_url, image_url, open_in, reward_coins, is_active)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+                    [safeTitle, safeDescription, safeProvider, offer_url, safeImageUrl, openIn, reward_coins, safeActive]
                 )
                 : await client.query(
                     `UPDATE admin_managed_tasks
                      SET title = $1, description = $2, provider_name = $3,
-                         offer_url = $4, image_url = $5, reward_coins = $6,
-                         is_active = $7, updated_at = NOW()
-                     WHERE id = $8 RETURNING *`,
-                    [safeTitle, safeDescription, safeProvider, offer_url, safeImageUrl, reward_coins, safeActive, id]
+                         offer_url = $4, image_url = $5, open_in = $6, reward_coins = $7,
+                         is_active = $8, updated_at = NOW()
+                     WHERE id = $9 RETURNING *`,
+                    [safeTitle, safeDescription, safeProvider, offer_url, safeImageUrl, openIn, reward_coins, safeActive, id]
                 );
 
             if (saved.rowCount === 0) {
@@ -1055,6 +1179,7 @@ export const AdminController = {
             await audit(client, id === null ? 'task_created' : 'task_updated', 'task', String(saved.rows[0].id), {
                 title: safeTitle,
                 provider_name: safeProvider,
+                open_in: openIn,
                 reward_coins,
                 is_active: safeActive,
             });

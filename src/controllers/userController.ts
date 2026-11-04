@@ -99,7 +99,7 @@ export const UserController = {
                         COALESCE(SUM(t.amount) FILTER (WHERE t.amount > 0), 0) AS coins_earned,
                         COALESCE(SUM(ABS(t.amount)) FILTER (WHERE t.amount < 0), 0) AS coins_redeemed,
                         COUNT(*) FILTER (
-                            WHERE t.transaction_type IN ('task', 'offerwall_completion', 'daily_bonus')
+                            WHERE t.transaction_type IN ('task', 'offerwall_completion')
                                OR t.source ILIKE '%offer%'
                         ) AS offers_completed
                  FROM users u
@@ -118,7 +118,6 @@ export const UserController = {
                 coins_earned: toNumber(profile.coins_earned),
                 coins_redeemed: toNumber(profile.coins_redeemed),
                 offers_completed: toNumber(profile.offers_completed),
-                referrals: 0,
             };
             const user = {
                 user_id: profile.user_id,
@@ -152,7 +151,7 @@ export const UserController = {
             const offersResult = await pool.query(
                 `SELECT COUNT(*) AS offers_completed
                  FROM transactions
-                 WHERE user_id = $1 AND (transaction_type IN ('task', 'offerwall_completion', 'daily_bonus') OR source ILIKE '%offer%')`,
+                 WHERE user_id = $1 AND (transaction_type IN ('task', 'offerwall_completion') OR source ILIKE '%offer%')`,
                 [userId]
             );
 
@@ -160,10 +159,7 @@ export const UserController = {
                 coins_earned: toNumber(earningsResult.rows[0]?.coins_earned ?? 0),
                 coins_redeemed: toNumber(earningsResult.rows[0]?.coins_redeemed ?? 0),
                 offers_completed: toNumber(offersResult.rows[0]?.offers_completed ?? 0),
-                offers_tried: toNumber(offersResult.rows[0]?.offers_completed ?? 0),
-                referrals: 0,
                 member_since: user.created_at || user.createdAt || null,
-                streak_days: 1,
                 total_earned: toNumber(earningsResult.rows[0]?.coins_earned ?? 0),
                 total_redeemed: toNumber(earningsResult.rows[0]?.coins_redeemed ?? 0),
             };
@@ -224,7 +220,7 @@ export const UserController = {
             const currentUser = currentUserResult.rows[0];
             const entries = leaderboardResult.rows.map((entry) => ({
                 rank: Number(entry.rank),
-                name: String(entry.full_name ?? '').trim() || 'Player',
+                name: String(entry.full_name ?? '').trim() || 'Member',
                 coins_earned: Number(entry.coins_earned),
                 is_current_user: typeof userId === 'string' && entry.user_id === userId,
             }));

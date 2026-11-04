@@ -89,6 +89,7 @@ export const TaskController = {
                         offer_virtual_currency: task.reward_coins,
                         offer_image: task.image_url,
                         offer_link: task.offer_url,
+                        open_in: task.open_in || 'auto',
                         task_type: 'external',
                         provider_name: task.provider_name,
                         source: 'admin_managed',

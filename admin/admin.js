@@ -21,6 +21,7 @@
     affiliate: "Affiliate posts",
     "redeem-cards": "Redeem cards",
     withdrawals: "Redemption requests",
+    notifications: "Notifications",
     "app-content": "App information",
     providers: "Providers",
     audit: "Audit log",
@@ -200,13 +201,13 @@
     content.innerHTML = `
       <div class="page-heading"><div><h2>Tasks &amp; rewards</h2><p>Manage offer links and the coin amounts displayed in the app.</p></div>
       <button id="add-task" class="button primary">Add task</button></div>
-      <section class="panel"><div class="panel-head"><h3>Admin-managed offers</h3><span class="badge">${number(data.tasks.length)} offers</span></div><div class="table-wrap"><table><thead><tr><th>Task</th><th>Provider</th><th>Reward</th><th>Status</th><th>Actions</th></tr></thead>
+      <section class="panel"><div class="panel-head"><h3>Admin-managed offers</h3><span class="badge">${number(data.tasks.length)} offers</span></div><div class="table-wrap"><table><thead><tr><th>Task</th><th>Provider</th><th>Open in</th><th>Reward</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>${data.tasks.map((task) => `<tr>
         <td><strong>${escapeHtml(task.title)}</strong><span class="subline">${escapeHtml(task.offer_url)}</span></td>
-        <td>${escapeHtml(task.provider_name)}</td><td>${number(task.reward_coins)} coins</td>
+        <td>${escapeHtml(task.provider_name)}</td><td>${escapeHtml(task.open_in || "auto")}</td><td>${number(task.reward_coins)} coins</td>
         <td><span class="badge ${task.is_active ? "" : "off"}">${task.is_active ? "Active" : "Paused"}</span></td>
         <td><button class="button small-button" data-edit-task="${task.id}">Edit</button></td>
-      </tr>`).join("") || `<tr><td colspan="5" class="empty">No managed tasks yet. Add one to display it in the app.</td></tr>`}</tbody>
+      </tr>`).join("") || `<tr><td colspan="6" class="empty">No managed tasks yet. Add one to display it in the app.</td></tr>`}</tbody>
       </table></div></section>
       <section class="panel"><div class="panel-head"><div><h3>Existing backend tasks</h3><p class="muted small">Legacy task rows already used by the Flutter app; at most 200 shown.</p></div></div>
       ${legacy.editable ? `<div class="table-wrap"><table><thead><tr><th>Task</th><th>Provider</th><th>Link</th><th>Display reward</th><th>Status</th><th>Actions</th></tr></thead>
@@ -443,6 +444,40 @@
     });
   }
 
+  async function renderNotifications() {
+    const data = await api("/notifications");
+    content.innerHTML = `
+      <div class="page-heading"><div><h2>Push notifications</h2><p>Send a message to users subscribed to RewardBrick through OneSignal.</p></div></div>
+      <section class="panel">
+        ${data.configured ? "" : `<p class="notice error">OneSignal is not configured. Add ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY to the backend environment.</p>`}
+        <form id="notification-form" class="provider-card">
+          <label>Notification title<input name="title" maxlength="80" required></label>
+          <label>Message<textarea name="message" rows="4" maxlength="500" required></textarea></label>
+          <label>Optional HTTPS destination<input name="target_url" type="url" placeholder="https://"></label>
+          <button class="button primary" type="submit" ${data.configured ? "" : "disabled"}>Send notification</button>
+        </form>
+      </section>
+      <section class="panel"><div class="panel-head"><h3>Recent notifications</h3></div>
+        <div class="table-wrap"><table><thead><tr><th>Sent</th><th>Title</th><th>Message</th><th>Recipients</th></tr></thead>
+        <tbody>${data.notifications.map((item) => `<tr><td>${escapeHtml(date(item.created_at))}</td>
+          <td><strong>${escapeHtml(item.title)}</strong></td><td>${escapeHtml(item.message)}</td>
+          <td>${number(item.recipients)}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">No notifications have been sent.</td></tr>`}</tbody></table></div>
+      </section>`;
+    document.querySelector("#notification-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const body = Object.fromEntries(new FormData(form));
+      try {
+        const result = await api("/notifications", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        notify(`${result.message} Recipients: ${number(result.recipients)}.`);
+        renderNotifications().catch(showError);
+      } catch (error) { notify(error.message, true); }
+    });
+  }
+
   async function renderAppContent() {
     const { content: items = [] } = await api("/app-content");
     const values = Object.fromEntries(items.map((item) => [item.content_key, item.content]));
@@ -565,6 +600,7 @@
     taskForm.elements.provider_name.value = task?.provider_name || state.providers[0]?.provider_name || "";
     taskForm.elements.offer_url.value = task?.offer_url || "";
     taskForm.elements.image_url.value = task?.image_url || "";
+    taskForm.elements.open_in.value = task?.open_in || "auto";
     taskForm.elements.reward_coins.value = task?.reward_coins ?? 0;
     taskForm.elements.is_active.checked = task?.is_active ?? true;
     document.querySelector("#task-dialog-title").textContent = task ? "Edit task" : "Add task";
@@ -584,6 +620,7 @@
       affiliate: renderAffiliatePosts,
       "redeem-cards": renderRedeemCards,
       withdrawals: renderWithdrawals,
+      notifications: renderNotifications,
       "app-content": renderAppContent,
       providers: renderProviders,
       audit: renderAudit,
@@ -631,6 +668,47 @@
   document.querySelectorAll("[data-close-redeem-card-dialog]").forEach((button) =>
     button.addEventListener("click", () => redeemCardDialog.close())
   );
+  document.addEventListener("change", async (event) => {
+    const input = event.target.closest("[data-cloudinary-upload]");
+    const file = input?.files?.[0];
+    if (!input || !file) return;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 10 * 1024 * 1024) {
+      input.value = "";
+      notify("Choose a PNG, JPEG or WebP image smaller than 10 MB.", true);
+      return;
+    }
+
+    input.disabled = true;
+    const submitButton = input.form.querySelector('button[type="submit"]');
+    if (submitButton) submitButton.disabled = true;
+    try {
+      const signed = await api("/cloudinary/signature");
+      const body = new FormData();
+      body.append("file", file);
+      body.append("api_key", signed.api_key);
+      body.append("timestamp", String(signed.timestamp));
+      body.append("folder", signed.folder);
+      body.append("signature", signed.signature);
+      const response = await fetch(
+        `https://api.cloudinary.com/v1_1/${encodeURIComponent(signed.cloud_name)}/image/upload`,
+        { method: "POST", body }
+      );
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || typeof result.secure_url !== "string") {
+        throw new Error(result.error?.message || "Cloudinary image upload failed.");
+      }
+      const urlField = input.form.elements[input.dataset.cloudinaryTarget];
+      if (!urlField) throw new Error("The image URL field was not found.");
+      urlField.value = result.secure_url;
+      notify("Image uploaded. Save the form to publish it.");
+    } catch (error) {
+      notify(error.message, true);
+    } finally {
+      input.disabled = false;
+      if (submitButton) submitButton.disabled = false;
+      input.value = "";
+    }
+  });
   bannerForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const values = new FormData(bannerForm);
@@ -707,6 +785,7 @@
       provider_name: values.get("provider_name"),
       offer_url: values.get("offer_url"),
       image_url: values.get("image_url"),
+      open_in: values.get("open_in"),
       reward_coins: Number(values.get("reward_coins")),
       is_active: taskForm.elements.is_active.checked,
     };

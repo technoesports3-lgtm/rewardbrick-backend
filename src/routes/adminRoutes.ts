@@ -19,6 +19,9 @@ router.post('/api/logout', requireAdminSession, adminLogout);
 router.get('/api/session', requireAdminSession, AdminController.getSession);
 router.use('/api', requireAdminSession);
 
+router.get('/api/cloudinary/signature', AdminController.getCloudinarySignature);
+router.get('/api/notifications', AdminController.listNotifications);
+router.post('/api/notifications', AdminController.sendNotification);
 router.get('/api/dashboard', AdminController.getDashboard);
 router.get('/api/users', AdminController.listUsers);
 router.patch('/api/users/:userId/status', AdminController.setUserStatus);

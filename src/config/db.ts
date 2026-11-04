@@ -88,11 +88,14 @@ export const ensureProviderSchema = async () => {
             provider_name TEXT NOT NULL DEFAULT 'custom',
             offer_url TEXT NOT NULL,
             image_url TEXT NOT NULL DEFAULT '',
+            open_in TEXT NOT NULL DEFAULT 'auto',
             reward_coins INTEGER NOT NULL DEFAULT 0,
             is_active BOOLEAN NOT NULL DEFAULT TRUE,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+        ALTER TABLE admin_managed_tasks
+            ADD COLUMN IF NOT EXISTS open_in TEXT NOT NULL DEFAULT 'auto';
         CREATE TABLE IF NOT EXISTS admin_audit_log (
             id BIGSERIAL PRIMARY KEY,
             action TEXT NOT NULL,
@@ -144,6 +147,15 @@ export const ensureProviderSchema = async () => {
             content_key TEXT PRIMARY KEY,
             content TEXT NOT NULL DEFAULT '',
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS admin_notifications (
+            id BIGSERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            target_url TEXT NOT NULL DEFAULT '',
+            provider_notification_id TEXT,
+            recipients INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
         CREATE TABLE IF NOT EXISTS dashboard_banner_cleanup_migration (
             id BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (id),
