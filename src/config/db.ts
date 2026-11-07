@@ -71,6 +71,29 @@ export const ensureProviderSchema = async () => {
             activity_type TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+        CREATE TABLE IF NOT EXISTS daily_bonus_sessions (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(user_id),
+            reward_day DATE NOT NULL,
+            verified_ads INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status IN ('pending', 'claimed', 'expired')),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (user_id, reward_day)
+        );
+        CREATE TABLE IF NOT EXISTS daily_bonus_ad_events (
+            transaction_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES daily_bonus_sessions(id),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS provider_postback_events (
+            id BIGSERIAL PRIMARY KEY,
+            provider_name TEXT NOT NULL,
+            transaction_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (provider_name, transaction_id)
+        );
     `);
 
     await pool.query(`

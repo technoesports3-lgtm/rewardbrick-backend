@@ -6,5 +6,6 @@ const router = Router();
 
 router.get('/list', activeUserGuard, TaskController.listHomeOffers);
 router.get('/postback', TaskController.handlePostback);
+router.get('/admob-ssv', TaskController.handleAdMobSsv);
 
 export default router;

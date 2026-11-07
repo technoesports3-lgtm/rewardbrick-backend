@@ -2,10 +2,10 @@ import { Request, Response } from 'express';
 import { PoolClient } from 'pg';
 import pool from '../config/db';
 import { TaskModel } from '../models/taskModel';
+import { AdMobSsvVerificationError, verifyAdMobSsvCallback } from '../services/admobSsv';
 
-const COINS_PER_RUPEE = 10;
-const ADMANTUM_REWARD_RUPEES = 40;
-const ADMANTUM_REWARD_COINS = COINS_PER_RUPEE * ADMANTUM_REWARD_RUPEES;
+const USER_REWARD_SHARE = 0.25;
+const ADMANTUM_GROSS_REWARD_COINS = 400;
 
 const defaultProviderUrls = {
     cpx_research: 'https://offers.cpx-research.com/index.php?app_id=52007&ext_user_id={userId}',
@@ -48,6 +48,17 @@ export const TaskController = {
             const userId = req.query.userId ? String(req.query.userId) : '{userId}';
             const surveyUrl = providerMap.cpx_research?.base_url || defaultProviderUrls.cpx_research;
             const gameUrl = providerMap.gamezop?.base_url || defaultProviderUrls.gamezop;
+            const userRewardForProvider = (providerName: string): number => {
+                const configuredGross = providerMap[providerName]?.reward_coins;
+                const grossCoins = configuredGross !== null && configuredGross !== undefined
+                    ? Number(configuredGross)
+                    : providerName === 'admantum'
+                        ? ADMANTUM_GROSS_REWARD_COINS
+                        : null;
+                return grossCoins !== null && Number.isSafeInteger(grossCoins)
+                    ? Math.floor(grossCoins * USER_REWARD_SHARE)
+                    : 0;
+            };
 
             const responseData = {
                 categories: [
@@ -70,12 +81,14 @@ export const TaskController = {
 
                         return {
                             ...task,
-                            offer_virtual_currency: task.reward_coins ??
-                                task.reward_amount ??
-                                task.offer_virtual_currency ??
-                                task.coins ??
-                                task.payout ??
-                                0,
+                            offer_virtual_currency: providerName && providerName !== 'internal'
+                                ? userRewardForProvider(providerName)
+                                : task.reward_coins ??
+                                    task.reward_amount ??
+                                    task.offer_virtual_currency ??
+                                    task.coins ??
+                                    task.payout ??
+                                    0,
                             task_type: task.task_type || (providerName ? 'external' : 'direct'),
                             provider_name: providerName || 'internal',
                             link_url: providerLink || task.link_url || null
@@ -86,7 +99,8 @@ export const TaskController = {
                         offer_title: task.title,
                         offer_description: task.description,
                         offer_type: task.provider_name,
-                        offer_virtual_currency: task.reward_coins,
+                        offer_virtual_currency:
+                            userRewardForProvider(String(task.provider_name).toLowerCase()),
                         offer_image: task.image_url,
                         offer_link: task.offer_url,
                         open_in: task.open_in || 'auto',
@@ -135,13 +149,18 @@ export const TaskController = {
                 return res.status(400).send('0');
             }
 
-            const configuredReward = provider.reward_coins;
-            const rewardAmount = configuredReward !== null && configuredReward !== undefined
-                ? Number(configuredReward)
+            const grossRewardCoins = provider.reward_coins !== null && provider.reward_coins !== undefined
+                ? Number(provider.reward_coins)
                 : providerName.toLowerCase() === 'admantum'
-                    ? ADMANTUM_REWARD_COINS
-                    : Math.round(providerPayout);
-            if (!Number.isSafeInteger(rewardAmount) || rewardAmount <= 0) {
+                    ? ADMANTUM_GROSS_REWARD_COINS
+                    : null;
+            const rewardAmount = grossRewardCoins === null
+                ? 0
+                : Math.floor(grossRewardCoins * USER_REWARD_SHARE);
+            if (grossRewardCoins === null ||
+                !Number.isSafeInteger(grossRewardCoins) ||
+                !Number.isSafeInteger(rewardAmount) ||
+                rewardAmount <= 0) {
                 return res.status(400).send('0');
             }
 
@@ -161,6 +180,27 @@ export const TaskController = {
             if (!userResult.rows[0].is_active) {
                 await client.query('ROLLBACK');
                 return res.status(403).send('0');
+            }
+
+            const transactionIdValue = req.query.transaction_id ??
+                req.query.transactionId ??
+                req.query.txid ??
+                req.query.event_id;
+            const transactionId = typeof transactionIdValue === 'string'
+                ? transactionIdValue.trim()
+                : '';
+            if (transactionId) {
+                const eventResult = await client.query(
+                    `INSERT INTO provider_postback_events (provider_name, transaction_id)
+                     VALUES ($1, $2)
+                     ON CONFLICT (provider_name, transaction_id) DO NOTHING
+                     RETURNING id`,
+                    [providerName, transactionId]
+                );
+                if (eventResult.rowCount === 0) {
+                    await client.query('COMMIT');
+                    return res.status(200).send('1');
+                }
             }
 
             const updateResult = await client.query(
@@ -195,6 +235,174 @@ export const TaskController = {
             }
             console.error('Postback Error:', error.message);
             return res.status(500).send('0');
+        } finally {
+            client?.release();
+        }
+    },
+
+    handleAdMobSsv: async (req: Request, res: Response) => {
+        const expectedAdUnitId = process.env.ADMOB_REWARDED_AD_UNIT_ID;
+        if (!expectedAdUnitId) {
+            return res.status(503).send('SSV is not configured.');
+        }
+
+        let callback: URLSearchParams;
+        try {
+            callback = await verifyAdMobSsvCallback(req.originalUrl);
+        } catch (error) {
+            if (error instanceof AdMobSsvVerificationError) {
+                return res.status(401).send('Invalid AdMob callback.');
+            }
+            console.error('AdMob SSV key verification failed:', error);
+            return res.status(503).send('Unable to verify AdMob callback.');
+        }
+
+        const adUnitId = callback.get('ad_unit') ?? '';
+        const userId = callback.get('user_id') ?? '';
+        const sessionId = callback.get('custom_data') ?? '';
+        const transactionId = callback.get('transaction_id') ?? '';
+        const rawTimestamp = Number(callback.get('timestamp'));
+        const timestamp = rawTimestamp >= 100_000_000_000_000
+            ? Math.floor(rawTimestamp / 1000)
+            : rawTimestamp;
+        const callbackTime = new Date(timestamp);
+        if (adUnitId !== expectedAdUnitId ||
+            !userId ||
+            !sessionId ||
+            !transactionId ||
+            !Number.isSafeInteger(timestamp) ||
+            Number.isNaN(callbackTime.getTime()) ||
+            callbackTime.getTime() > Date.now() + 5 * 60 * 1000 ||
+            Date.now() - callbackTime.getTime() > 24 * 60 * 60 * 1000 ||
+            callback.get('reward_amount') !== '1' ||
+            callback.get('reward_item') !== 'daily_bonus_ad') {
+            return res.status(400).send('Invalid AdMob reward callback.');
+        }
+
+        let client: PoolClient | undefined;
+        try {
+            client = await pool.connect();
+            await client.query('BEGIN');
+
+            const duplicate = await client.query(
+                'SELECT transaction_id FROM daily_bonus_ad_events WHERE transaction_id = $1',
+                [transactionId]
+            );
+            if (duplicate.rowCount) {
+                await client.query('COMMIT');
+                return res.status(200).send('OK');
+            }
+
+            const sessionOwner = await client.query(
+                `SELECT user_id FROM daily_bonus_sessions WHERE id = $1`,
+                [sessionId]
+            );
+            if (sessionOwner.rowCount === 0 || sessionOwner.rows[0].user_id !== userId) {
+                await client.query('ROLLBACK');
+                return res.status(400).send('Unknown or expired reward session.');
+            }
+
+            const userResult = await client.query(
+                'SELECT is_active FROM users WHERE user_id = $1 FOR UPDATE',
+                [userId]
+            );
+            if (!userResult.rows[0]?.is_active) {
+                await client.query('ROLLBACK');
+                return res.status(403).send('User is not eligible.');
+            }
+
+            const sessionResult = await client.query(
+                `SELECT verified_ads, status, created_at
+                 FROM daily_bonus_sessions WHERE id = $1 FOR UPDATE`,
+                [sessionId]
+            );
+            if (sessionResult.rows[0].status !== 'pending') {
+                await client.query('COMMIT');
+                return res.status(200).send('OK');
+            }
+            if (new Date(sessionResult.rows[0].created_at).getTime() <
+                Date.now() - 24 * 60 * 60 * 1000) {
+                await client.query(
+                    `UPDATE daily_bonus_sessions
+                     SET status = 'expired', updated_at = NOW()
+                     WHERE id = $1`,
+                    [sessionId]
+                );
+                await client.query('COMMIT');
+                return res.status(200).send('OK');
+            }
+
+            const recentClaim = await client.query(
+                `SELECT id FROM activity_logs
+                 WHERE user_id = $1 AND activity_type = 'daily_bonus'
+                   AND created_at > NOW() - INTERVAL '24 hours'
+                 LIMIT 1`,
+                [userId]
+            );
+            if (recentClaim.rowCount) {
+                await client.query(
+                    `UPDATE daily_bonus_sessions
+                     SET status = 'expired', updated_at = NOW()
+                     WHERE id = $1`,
+                    [sessionId]
+                );
+                await client.query('COMMIT');
+                return res.status(200).send('OK');
+            }
+
+            const eventResult = await client.query(
+                `INSERT INTO daily_bonus_ad_events (transaction_id, session_id)
+                 VALUES ($1, $2)
+                 ON CONFLICT (transaction_id) DO NOTHING
+                 RETURNING transaction_id`,
+                [transactionId, sessionId]
+            );
+            if (eventResult.rowCount === 0) {
+                await client.query('COMMIT');
+                return res.status(200).send('OK');
+            }
+            const updatedSession = await client.query(
+                `UPDATE daily_bonus_sessions
+                 SET verified_ads = verified_ads + 1, updated_at = NOW()
+                 WHERE id = $1 RETURNING verified_ads`,
+                [sessionId]
+            );
+
+            if (Number(updatedSession.rows[0].verified_ads) >= 3) {
+                const balanceResult = await client.query(
+                    `UPDATE users SET wallet_balance = wallet_balance + 5
+                     WHERE user_id = $1 RETURNING wallet_balance`,
+                    [userId]
+                );
+                await client.query(
+                    `INSERT INTO transactions
+                        (user_id, amount, transaction_type, source, balance_after)
+                     VALUES ($1, 5, 'daily_bonus', 'Daily bonus (3 verified ads)', $2)`,
+                    [userId, balanceResult.rows[0].wallet_balance]
+                );
+                await client.query(
+                    `INSERT INTO activity_logs (user_id, activity_type)
+                     VALUES ($1, 'daily_bonus')`,
+                    [userId]
+                );
+                await client.query(
+                    `UPDATE daily_bonus_sessions
+                     SET status = 'claimed', updated_at = NOW()
+                     WHERE id = $1`,
+                    [sessionId]
+                );
+            }
+
+            await client.query('COMMIT');
+            return res.status(200).send('OK');
+        } catch (error) {
+            if (client) {
+                await client.query('ROLLBACK').catch((rollbackError: Error) => {
+                    console.error('AdMob SSV rollback failed:', rollbackError.message);
+                });
+            }
+            console.error('AdMob SSV reward processing failed:', error);
+            return res.status(500).send('Reward callback processing failed.');
         } finally {
             client?.release();
         }

@@ -62,9 +62,9 @@
       <label>Image URL (optional)<input name="image_url" type="url" placeholder="https://"></label>
       <label class="image-upload-field">Upload task image<input type="file" accept="image/png,image/jpeg,image/webp" data-cloudinary-upload data-cloudinary-target="image_url"><span class="upload-status" aria-live="polite">Choose a PNG, JPEG or WebP image to upload.</span></label>
       <label>Open link in<select name="open_in"><option value="auto">Auto-detect app/store links</option><option value="play_store">Google Play Store</option><option value="browser">Browser</option></select></label>
-      <label>Display reward in coins<input name="reward_coins" type="number" min="0" max="1000000" step="1" required></label>
+      <label>Fallback display reward in coins<input name="reward_coins" type="number" min="0" max="1000000" step="1" required></label>
       <label class="check-label"><input name="is_active" type="checkbox" checked> Active and visible in the app</label>
-      <p class="muted small">External task completion and crediting still depends on the provider's verified postback.</p>
+      <p class="muted small">For configured external providers, the app displays the backend-calculated 25% user share. This fallback is for offers without a provider reward configuration; completion still requires a verified provider postback.</p>
       <div class="dialog-actions"><button class="button quiet" type="button" data-close-dialog>Cancel</button><button class="button primary" type="submit">Save task</button></div>
     </form>
   </dialog>
@@ -109,7 +109,7 @@
       <label>Gift card provider<input name="title" maxlength="80" placeholder="Google Play, Amazon Pay, Free Fire..." required></label>
       <label>Card denomination in rupees<input name="denomination_inr" type="number" min="25" max="10000" step="1" required></label>
       <label>Minimum wallet coins required<input name="minimum_coins" type="number" min="250" max="100000" step="1" value="1000" required></label>
-      <p class="muted small">Conversion is fixed at 10 coins = ₹1. Free Fire/PUBG minimum is 250 coins; other vouchers require at least 1,000 coins.</p>
+      <p class="muted small">Conversion is fixed at 10 coins = ₹1. A 5-coin daily bonus is worth ₹0.50. Free Fire/PUBG minimum is 250 coins; other vouchers require at least 1,000 coins.</p>
       <label>Display order<input name="sort_order" type="number" min="0" max="10000" step="1" value="0" required></label>
       <label class="check-label"><input name="is_active" type="checkbox" checked> Available for redemption</label>
       <div class="dialog-actions"><button class="button quiet" type="button" data-close-redeem-card-dialog>Cancel</button><button class="button primary" type="submit">Save gift card</button></div>

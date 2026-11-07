@@ -210,7 +210,7 @@
       </tr>`).join("") || `<tr><td colspan="6" class="empty">No managed tasks yet. Add one to display it in the app.</td></tr>`}</tbody>
       </table></div></section>
       <section class="panel"><div class="panel-head"><div><h3>Existing backend tasks</h3><p class="muted small">Legacy task rows already used by the Flutter app; at most 200 shown.</p></div></div>
-      ${legacy.editable ? `<div class="table-wrap"><table><thead><tr><th>Task</th><th>Provider</th><th>Link</th><th>Display reward</th><th>Status</th><th>Actions</th></tr></thead>
+      ${legacy.editable ? `<div class="table-wrap"><table><thead><tr><th>Task</th><th>Provider</th><th>Link</th><th>Fallback reward</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>${legacy.tasks.map((task) => `<tr>
         <td><strong>${escapeHtml(task.title)}</strong><span class="subline">ID: ${escapeHtml(task.id)}</span></td>
         <td>${escapeHtml(task.provider || "—")}</td><td class="subline">${escapeHtml(task.offer_url || "—")}</td>
@@ -222,7 +222,7 @@
         </div></td></tr>`).join("") || `<tr><td colspan="6" class="empty">No legacy tasks found.</td></tr>`}</tbody></table></div>`
         : `<p class="muted small">${escapeHtml(legacy.message || "Legacy task rows could not be edited.")}</p>`}
       </section>
-      <section class="panel"><h3>Reward flow note</h3><p class="muted small">Displayed task coins do not prove completion. External task coins are credited only by a valid provider postback, using the configured provider reward. Provider-level fixed rewards are managed in Providers.</p></section>`;
+      <section class="panel"><h3>Reward flow note</h3><p class="muted small">Configured providers display and credit the same 25% user share only after a valid server-side provider postback. Provider gross reward bases are managed in Providers.</p></section>`;
     document.querySelector("#add-task").addEventListener("click", () => openTaskDialog(null));
     document.querySelectorAll("[data-edit-task]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -257,7 +257,7 @@
             method: "PATCH",
             body: JSON.stringify({ reward_coins: reward }),
           });
-          notify("Display reward updated.");
+          notify("Fallback reward updated.");
           renderTasks().catch(showError);
         } catch (error) { notify(error.message, true); }
       });
@@ -327,13 +327,13 @@
         <article class="provider-card"><h3>${escapeHtml(provider.provider_name.replaceAll("_", " "))}</h3>
           <form data-provider="${escapeHtml(provider.provider_name)}">
             <label>Offer / tracking base URL<input name="base_url" type="url" value="${escapeHtml(provider.base_url)}" required></label>
-            <label>Reward coins per valid callback<input name="reward_coins" type="number" min="0" max="1000000" step="1" value="${provider.reward_coins == null ? "" : escapeHtml(provider.reward_coins)}" placeholder="Provider payout conversion"></label>
+            <label>Gross payout basis in coins<input name="reward_coins" type="number" min="0" max="1000000" step="1" value="${provider.reward_coins == null ? "" : escapeHtml(provider.reward_coins)}" placeholder="Gross coins at 10 coins = ₹1"></label>
             <label>New postback secret<input name="secret_key" type="password" minlength="12" autocomplete="new-password" placeholder="${provider.secret_configured ? "Secret is configured; leave blank to keep it" : "Enter the provider callback secret"}"></label>
             <p class="muted small">Current secret: ${provider.secret_configured ? "configured (hidden)" : "not configured"}</p>
             <button class="button primary" type="submit">Save provider</button>
           </form>
         </article>`).join("")}</section>
-      <section class="panel"><h3>Conversion reminder</h3><p class="muted small">Current business rule: 10 coins = ₹1; AdMantum defaults to 400 coins per valid completion (₹40). If you change a provider reward, verify its real payout and task terms first.</p></section>`;
+      <section class="panel"><h3>Conversion and share</h3><p class="muted small">10 coins = ₹1. Enter the gross rupee payout converted to coins; users receive 25% (rounded down), and RewardBrick retains 75%. AdMantum defaults to 400 gross coins (₹40), so a valid completion credits 100 coins (₹10) to the user. Confirm each provider's payout currency and terms before configuring it.</p></section>`;
     document.querySelectorAll("[data-provider]").forEach((form) => {
       form.addEventListener("submit", async (event) => {
         event.preventDefault();

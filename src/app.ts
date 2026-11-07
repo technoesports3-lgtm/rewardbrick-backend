@@ -22,7 +22,8 @@ const app: Application = express();
 app.use(helmet()); 
 app.use(cors({ origin: "*" })); 
 app.use(express.json()); 
-app.use(morgan('dev')); 
+morgan.token('safe-url', (req) => req.url?.split('?')[0] ?? '');
+app.use(morgan(':method :safe-url :status :response-time ms - :res[content-length]'));
 
 // ==========================================
 // 💓 SYSTEM HEARTBEAT (Health Check API)

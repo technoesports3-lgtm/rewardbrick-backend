@@ -7,7 +7,7 @@ export const TaskModel = {
     },
     getProviderConfigs: async () => {
         const res = await pool.query(
-            'SELECT provider_name, base_url, secret_key FROM provider_configs ORDER BY provider_name ASC'
+            'SELECT provider_name, base_url, reward_coins FROM provider_configs ORDER BY provider_name ASC'
         );
         return res.rows;
     },

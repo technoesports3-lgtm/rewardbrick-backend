@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { UserModel } from '../models/userModel';
 import pool from '../config/db';
+import { randomUUID } from 'crypto';
 
 const toNumber = (value: any): number => {
     if (typeof value === 'number' && Number.isFinite(value)) return value;
@@ -324,6 +325,63 @@ export const UserController = {
         }
     },
 
+    getWalletActivity: async (req: Request, res: Response) => {
+        const userId = req.params.userId as string;
+        const limit = Number(req.query.limit ?? 30);
+        const offset = Number(req.query.offset ?? 0);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 50 ||
+            !Number.isInteger(offset) || offset < 0) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Provide a limit from 1 to 50 and a non-negative offset.',
+            });
+        }
+
+        try {
+            const result = await pool.query(
+                `SELECT activity_type, activity_id, created_at, amount_coins,
+                        title, status, voucher_reference
+                 FROM (
+                    SELECT 'transaction'::TEXT AS activity_type,
+                           t.id::TEXT AS activity_id,
+                           t.created_at,
+                           t.amount::NUMERIC AS amount_coins,
+                           COALESCE(NULLIF(t.source, ''), t.transaction_type) AS title,
+                           t.transaction_type AS status,
+                           NULL::TEXT AS voucher_reference
+                    FROM transactions t
+                    WHERE t.user_id = $1
+                    UNION ALL
+                    SELECT 'withdrawal'::TEXT AS activity_type,
+                           w.id::TEXT AS activity_id,
+                           w.created_at,
+                           -w.amount_coins::NUMERIC AS amount_coins,
+                           COALESCE(rc.title, w.method) || ' redemption' AS title,
+                           w.status,
+                           w.voucher_reference
+                    FROM withdrawals w
+                    LEFT JOIN redeem_cards rc ON rc.id = w.redeem_card_id
+                    WHERE w.user_id = $1
+                 ) AS wallet_activity
+                 ORDER BY created_at DESC, activity_type ASC, activity_id DESC
+                 LIMIT $2 OFFSET $3`,
+                [userId, limit + 1, offset]
+            );
+            const hasMore = result.rows.length > limit;
+            return res.status(200).json({
+                status: 'success',
+                activity: result.rows.slice(0, limit),
+                has_more: hasMore,
+            });
+        } catch (error) {
+            console.error('Wallet activity could not be loaded:', error);
+            return res.status(500).json({
+                status: 'error',
+                message: 'Could not load wallet activity.',
+            });
+        }
+    },
+
     getWithdrawalHistory: async (req: Request, res: Response) => {
         try {
             const userId = req.params.userId as string;
@@ -498,54 +556,141 @@ export const UserController = {
         }
     },
 
-    claimDailyBonus: async (req: Request, res: Response) => {
-        const { userId } = req.body;
-        if (!userId) return res.status(400).json({ error: 'User ID required' });
+    startDailyBonusSession: async (req: Request, res: Response) => {
+        const userId = typeof req.body?.userId === 'string' ? req.body.userId.trim() : '';
+        if (!userId) return res.status(400).json({ status: 'error', message: 'User ID required.' });
+        if (!process.env.ADMOB_REWARDED_AD_UNIT_ID) {
+            return res.status(503).json({
+                status: 'error',
+                message: 'Server-verified daily rewards are not configured.',
+            });
+        }
 
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
-
-            const lastClaimQuery = `
-                SELECT created_at FROM activity_logs
-                WHERE user_id = $1 AND activity_type = 'daily_bonus'
-                ORDER BY created_at DESC LIMIT 1;
-            `;
-            const lastClaimRes = await client.query(lastClaimQuery, [userId]);
-
-            if (lastClaimRes.rows.length > 0) {
-                const lastClaimTime = new Date(lastClaimRes.rows[0].created_at).getTime();
-                const currentTime = new Date().getTime();
-                const hoursPassed = (currentTime - lastClaimTime) / (1000 * 60 * 60);
-
-                if (hoursPassed < 24) {
-                    await client.query('ROLLBACK');
-                    return res.status(400).json({ error: 'Come back tomorrow for your next bonus!' });
-                }
-            }
-
-            const updateRes = await client.query(
-                'UPDATE users SET wallet_balance = wallet_balance + 100 WHERE user_id = $1 RETURNING wallet_balance',
+            const userResult = await client.query(
+                'SELECT user_id FROM users WHERE user_id = $1 AND is_active = TRUE FOR UPDATE',
                 [userId]
             );
-            const newBalance = updateRes.rows[0].wallet_balance;
+            if (userResult.rowCount === 0) {
+                await client.query('ROLLBACK');
+                return res.status(404).json({ status: 'error', message: 'User not found.' });
+            }
+
+            const lastClaim = await client.query(
+                `SELECT created_at FROM activity_logs
+                 WHERE user_id = $1 AND activity_type = 'daily_bonus'
+                   AND created_at > NOW() - INTERVAL '24 hours'
+                 ORDER BY created_at DESC LIMIT 1`,
+                [userId]
+            );
+            if (lastClaim.rowCount) {
+                await client.query('ROLLBACK');
+                return res.status(409).json({
+                    status: 'error',
+                    message: 'Come back tomorrow for your next bonus.',
+                });
+            }
 
             await client.query(
-                'INSERT INTO transactions (user_id, amount, transaction_type, source, balance_after) VALUES ($1, $2, $3, $4, $5)',
-                [userId, 100, 'daily_bonus', 'System Reward', newBalance]
+                `UPDATE daily_bonus_sessions SET status = 'expired', updated_at = NOW()
+                 WHERE user_id = $1 AND status = 'pending'
+                   AND created_at <= NOW() - INTERVAL '24 hours'`,
+                [userId]
             );
-            await client.query(
-                'INSERT INTO activity_logs (user_id, activity_type) VALUES ($1, $2)',
-                [userId, 'daily_bonus']
+            const pendingSession = await client.query(
+                `SELECT id, verified_ads FROM daily_bonus_sessions
+                 WHERE user_id = $1 AND status = 'pending'
+                   AND created_at > NOW() - INTERVAL '24 hours'
+                 ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+                [userId]
             );
+            if (pendingSession.rowCount) {
+                await client.query('COMMIT');
+                return res.status(200).json({
+                    status: 'success',
+                    session_id: pendingSession.rows[0].id,
+                    verified_ads: Number(pendingSession.rows[0].verified_ads),
+                    required_ads: 3,
+                    reward_coins: 5,
+                });
+            }
 
+            const sessionId = randomUUID();
+            const insertedSession = await client.query(
+                `INSERT INTO daily_bonus_sessions (id, user_id, reward_day)
+                 VALUES ($1, $2, (NOW() AT TIME ZONE 'UTC')::DATE)
+                 ON CONFLICT (user_id, reward_day) DO NOTHING
+                 RETURNING id, verified_ads, status`,
+                [sessionId, userId]
+            );
+            const session = insertedSession.rowCount
+                ? insertedSession.rows[0]
+                : (await client.query(
+                    `SELECT id, verified_ads, status FROM daily_bonus_sessions
+                     WHERE user_id = $1
+                       AND reward_day = (NOW() AT TIME ZONE 'UTC')::DATE
+                     FOR UPDATE`,
+                    [userId]
+                )).rows[0];
+            if (!session || session.status !== 'pending') {
+                await client.query('ROLLBACK');
+                return res.status(409).json({
+                    status: 'error',
+                    message: 'Come back tomorrow for your next bonus.',
+                });
+            }
             await client.query('COMMIT');
-            return res.status(200).json({ status: 'success', message: '100 Coins Claimed!', newBalance });
-        } catch (e: any) {
-            await client.query('ROLLBACK');
-            return res.status(500).json({ error: e.message });
+            return res.status(200).json({
+                status: 'success',
+                session_id: session.id,
+                verified_ads: Number(session.verified_ads),
+                required_ads: 3,
+                reward_coins: 5,
+            });
+        } catch (error) {
+            await client.query('ROLLBACK').catch((rollbackError: Error) => {
+                console.error('Daily bonus session rollback failed:', rollbackError.message);
+            });
+            console.error('Daily bonus session could not be started:', error);
+            return res.status(500).json({
+                status: 'error',
+                message: 'Could not start the daily bonus. Please try again.',
+            });
         } finally {
             client.release();
+        }
+    },
+
+    getDailyBonusSession: async (req: Request, res: Response) => {
+        const sessionId = typeof req.params.sessionId === 'string' ? req.params.sessionId : '';
+        const userId = typeof req.query.userId === 'string' ? req.query.userId : '';
+        if (!sessionId || !userId) {
+            return res.status(400).json({ status: 'error', message: 'A valid session and user are required.' });
+        }
+
+        try {
+            const result = await pool.query(
+                `SELECT verified_ads, status FROM daily_bonus_sessions
+                 WHERE id = $1 AND user_id = $2`,
+                [sessionId, userId]
+            );
+            if (result.rowCount === 0) {
+                return res.status(404).json({ status: 'error', message: 'Daily bonus session not found.' });
+            }
+            return res.status(200).json({
+                status: 'success',
+                verified_ads: Number(result.rows[0].verified_ads),
+                required_ads: 3,
+                claimed: result.rows[0].status === 'claimed',
+            });
+        } catch (error) {
+            console.error('Daily bonus session status could not be loaded:', error);
+            return res.status(500).json({
+                status: 'error',
+                message: 'Could not check the daily bonus status.',
+            });
         }
     }
 };
