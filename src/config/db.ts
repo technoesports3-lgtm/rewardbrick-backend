@@ -10,7 +10,7 @@ const pool = new Pool({
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-export const ensureProviderSchema = async () => {
+export const ensureDatabaseSchema = async () => {
     const deviceIdColumn = await pool.query(
         `SELECT is_nullable FROM information_schema.columns
          WHERE table_schema = current_schema()
@@ -70,29 +70,6 @@ export const ensureProviderSchema = async () => {
             user_id TEXT NOT NULL,
             activity_type TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        CREATE TABLE IF NOT EXISTS daily_bonus_sessions (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL REFERENCES users(user_id),
-            reward_day DATE NOT NULL,
-            verified_ads INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL DEFAULT 'pending'
-                CHECK (status IN ('pending', 'claimed', 'expired')),
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE (user_id, reward_day)
-        );
-        CREATE TABLE IF NOT EXISTS daily_bonus_ad_events (
-            transaction_id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL REFERENCES daily_bonus_sessions(id),
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        CREATE TABLE IF NOT EXISTS provider_postback_events (
-            id BIGSERIAL PRIMARY KEY,
-            provider_name TEXT NOT NULL,
-            transaction_id TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE (provider_name, transaction_id)
         );
     `);
 
@@ -196,6 +173,82 @@ export const ensureProviderSchema = async () => {
         CREATE INDEX IF NOT EXISTS withdrawals_user_created_idx
             ON withdrawals (user_id, created_at DESC);
     `);
+    await pool.query(`
+        DO $daily_bonus_schema$
+        DECLARE
+            user_id_type TEXT;
+            session_user_id_type TEXT;
+        BEGIN
+            SELECT format_type(a.atttypid, a.atttypmod)
+            INTO user_id_type
+            FROM pg_attribute AS a
+            WHERE a.attrelid = 'users'::regclass
+              AND a.attname = 'user_id'
+              AND NOT a.attisdropped;
+
+            IF user_id_type IS NULL THEN
+                RAISE EXCEPTION 'The users table must have a user_id column before daily bonus schema initialization';
+            END IF;
+
+            EXECUTE format(
+                'CREATE TABLE IF NOT EXISTS daily_bonus_sessions (
+                    id TEXT PRIMARY KEY,
+                    user_id %s NOT NULL,
+                    reward_day DATE NOT NULL,
+                    verified_ads INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT ''pending''
+                        CHECK (status IN (''pending'', ''claimed'', ''expired'')),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (user_id, reward_day)
+                )',
+                user_id_type
+            );
+
+            SELECT format_type(a.atttypid, a.atttypmod)
+            INTO session_user_id_type
+            FROM pg_attribute AS a
+            WHERE a.attrelid = 'daily_bonus_sessions'::regclass
+              AND a.attname = 'user_id'
+              AND NOT a.attisdropped;
+
+            IF session_user_id_type IS DISTINCT FROM user_id_type THEN
+                ALTER TABLE daily_bonus_sessions
+                    DROP CONSTRAINT IF EXISTS daily_bonus_sessions_user_id_fkey;
+                EXECUTE format(
+                    'ALTER TABLE daily_bonus_sessions
+                     ALTER COLUMN user_id TYPE %s USING user_id::%s',
+                    user_id_type,
+                    user_id_type
+                );
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conrelid = 'daily_bonus_sessions'::regclass
+                  AND conname = 'daily_bonus_sessions_user_id_fkey'
+            ) THEN
+                ALTER TABLE daily_bonus_sessions
+                    ADD CONSTRAINT daily_bonus_sessions_user_id_fkey
+                    FOREIGN KEY (user_id) REFERENCES users(user_id);
+            END IF;
+        END;
+        $daily_bonus_schema$;
+
+        CREATE TABLE IF NOT EXISTS daily_bonus_ad_events (
+            transaction_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES daily_bonus_sessions(id),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS provider_postback_events (
+            id BIGSERIAL PRIMARY KEY,
+            provider_name TEXT NOT NULL,
+            transaction_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (provider_name, transaction_id)
+        );
+    `);
     const providerCoinMigration = await pool.query(
         `INSERT INTO provider_coin_conversion_migration DEFAULT VALUES
          ON CONFLICT DO NOTHING RETURNING id`
@@ -259,9 +312,9 @@ pool.query('SELECT NOW()', (err, res) => {
     }
 });
 
-export const databaseReady = ensureProviderSchema();
+export const databaseReady = ensureDatabaseSchema();
 databaseReady.catch((error: Error) => {
-    console.error('[DATABASE] Provider schema initialization failed:', error.message);
+    console.error('[DATABASE] Schema initialization failed:', error.message);
 });
 
 export default pool;
